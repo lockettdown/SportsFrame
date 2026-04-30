@@ -59,7 +59,6 @@
           <nav class="top-actions" aria-label="Primary actions">
             <button class="ghost-button active-view" id="editorNavBtn">Editor</button>
             <button class="ghost-button" id="dashboardNavBtn">Dashboard</button>
-            <button class="primary-button" id="uploadBtn">Upload</button>
             <button class="primary-button accent" id="exportBtn">Export</button>
           </nav>
         </header>
@@ -69,7 +68,7 @@
             <div class="browser-top">
               <h2>Library</h2>
               <div class="browser-actions">
-                <button type="button" id="addMediaBtn" title="Add video or image">+</button>
+                <button type="button" class="primary-button" id="uploadBtn">Upload</button>
               </div>
             </div>
             <div class="library-list" id="libraryList">
@@ -100,6 +99,11 @@
                 <input type="checkbox" id="syncToggle" />
                 Sync playback
               </label>
+              <div class="view-switch" aria-label="Video view mode">
+                <button type="button" class="selected" data-video-view="primary">Original</button>
+                <button type="button" data-video-view="compare">Comparison</button>
+                <button type="button" data-video-view="split">Both</button>
+              </div>
             </div>
 
             <div class="video-layout" id="videoLayout">
@@ -108,27 +112,41 @@
                 <canvas id="captureCanvas"></canvas>
                 <canvas id="annotationCanvas"></canvas>
                 <div class="empty-state" id="emptyA">
-                  <strong>Drop in a training video or still image</strong>
-                  <span>Scrub frame by frame, capture the moment, and draw technique notes directly on the still.</span>
+                  <strong>Drag media here from the Library</strong>
+                  <span>Import footage with Upload, then drag a video or still image into the Original window.</span>
                 </div>
               </article>
               <article class="video-pane compare-pane" id="comparePane">
-                <div class="pane-label">Progress comparison</div>
                 <video id="videoB" playsinline></video>
+                <canvas id="compareAnnotationCanvas"></canvas>
                 <div class="empty-state compact-empty" id="emptyB">
-                  <strong>Upload comparison video</strong>
-                  <span>Click here to add a different video beside the main player.</span>
+                  <strong>Drag comparison video here</strong>
+                  <span>Import footage with Upload, then drag a video into the Comparison window.</span>
                 </div>
               </article>
             </div>
-            <section class="frame-strip-panel" aria-label="Video frames">
-              <div class="frame-strip-head">
-                <strong>Frames</strong>
-                <span id="frameStripStatus">Add a video to inspect frames</span>
-              </div>
-              <div class="frame-strip" id="frameStrip" tabindex="0" aria-label="Scroll frame by frame"></div>
-            </section>
-            <div class="preview-transport" aria-label="Playback controls">
+            <div class="frame-strip-layout">
+              <section class="frame-strip-panel primary-frame-strip-panel" aria-label="Video frames">
+                <div class="frame-strip-head">
+                  <strong>Frames</strong>
+                  <span id="frameStripStatus">Add a video to inspect frames</span>
+                </div>
+                <div class="frame-strip" id="frameStrip" tabindex="0" aria-label="Scroll frame by frame"></div>
+              </section>
+              <section class="frame-strip-panel compare-frame-strip-panel" aria-label="Comparison video frames">
+                <div class="frame-strip-head">
+                  <strong>Comparison Frames</strong>
+                  <span id="compareFrameStripStatus">Add a comparison video to inspect frames</span>
+                </div>
+                <div class="frame-strip" id="compareFrameStrip" tabindex="0" aria-label="Scroll comparison video frame by frame"></div>
+              </section>
+            </div>
+            <div class="preview-transport compare-preview-transport" aria-label="Comparison playback controls">
+              <button id="comparePlayBtn" type="button">Play</button>
+              <button id="compareBackFrameBtn" type="button" title="Comparison back 1 frame" aria-label="Comparison back 1 frame">&lt;</button>
+              <button id="compareNextFrameBtn" type="button" title="Comparison forward 1 frame" aria-label="Comparison forward 1 frame">&gt;</button>
+            </div>
+            <div class="preview-transport primary-preview-transport" aria-label="Playback controls">
               <button id="playBtn">Play</button>
               <button id="backFrameBtn" title="Back 1 frame" aria-label="Back 1 frame">&lt;</button>
               <button id="nextFrameBtn" title="Forward 1 frame" aria-label="Forward 1 frame">&gt;</button>
@@ -290,8 +308,7 @@
         </footer>
       </main>
 
-      <input id="fileA" type="file" accept="video/*,image/*" hidden />
-      <input id="fileB" type="file" accept="video/*" hidden />
+      <input id="fileA" type="file" accept="video/*,image/*" multiple hidden />
       <input id="athleteInput" value="Maya Rodriguez" hidden />
       <input id="sessionInput" type="date" hidden />
     </div>

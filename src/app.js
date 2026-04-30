@@ -9,19 +9,24 @@ const state = {
   color: "#ff7a59",
   width: 5,
   drawing: false,
+  drawingTarget: "original",
   start: null,
   currentPath: [],
   annotations: [],
+  compareAnnotations: [],
   stillImage: null,
   frameRate: 24,
   frameStripRun: 0,
+  compareFrameStripRun: 0,
   currentMediaKind: null,
   analyzing: false,
+  libraryMedia: [],
   savedFrames: JSON.parse(localStorage.getItem("diamondframe.frames") || "[]"),
   user: JSON.parse(localStorage.getItem("diamondframe.user") || "null"),
   subscription: localStorage.getItem("diamondframe.subscription") || "free",
   captured: false,
-  comparing: false
+  comparing: false,
+  videoView: "primary"
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -29,18 +34,22 @@ const videoA = $("#videoA");
 const videoB = $("#videoB");
 const captureCanvas = $("#captureCanvas");
 const annotationCanvas = $("#annotationCanvas");
+const compareAnnotationCanvas = $("#compareAnnotationCanvas");
 const captureCtx = captureCanvas.getContext("2d");
 const annotationCtx = annotationCanvas.getContext("2d");
+const compareAnnotationCtx = compareAnnotationCanvas.getContext("2d");
 const fileA = $("#fileA");
-const fileB = $("#fileB");
 const frameStrip = $("#frameStrip");
 const frameStripStatus = $("#frameStripStatus");
+const compareFrameStrip = $("#compareFrameStrip");
+const compareFrameStripStatus = $("#compareFrameStripStatus");
 
 const sessionInput = $("#sessionInput");
 if (sessionInput) sessionInput.valueAsDate = new Date();
 
 function resizeCanvases() {
   const pane = $(".primary-pane").getBoundingClientRect();
+  const comparePane = $("#comparePane").getBoundingClientRect();
   const ratio = window.devicePixelRatio || 1;
   for (const canvas of [captureCanvas, annotationCanvas]) {
     canvas.width = Math.max(1, Math.floor(pane.width * ratio));
@@ -48,14 +57,20 @@ function resizeCanvases() {
     canvas.style.width = `${pane.width}px`;
     canvas.style.height = `${pane.height}px`;
   }
+  compareAnnotationCanvas.width = Math.max(1, Math.floor(comparePane.width * ratio));
+  compareAnnotationCanvas.height = Math.max(1, Math.floor(comparePane.height * ratio));
+  compareAnnotationCanvas.style.width = `${comparePane.width}px`;
+  compareAnnotationCanvas.style.height = `${comparePane.height}px`;
   annotationCtx.setTransform(ratio, 0, 0, ratio, 0, 0);
   captureCtx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  compareAnnotationCtx.setTransform(ratio, 0, 0, ratio, 0, 0);
   if (state.stillImage) {
     const rect = captureCanvas.getBoundingClientRect();
     captureCtx.clearRect(0, 0, rect.width, rect.height);
     drawContainedImage(captureCtx, state.stillImage, rect.width, rect.height);
   }
   redraw();
+  redraw("comparison");
 }
 
 function formatTime(seconds = 0) {
@@ -74,8 +89,11 @@ function loadVideo(file, video, emptyEl) {
     state.currentMediaKind = "video";
     clearFrameStrip("Preparing frames...");
     captureCtx.clearRect(0, 0, captureCanvas.width, captureCanvas.height);
+  } else {
+    clearCompareFrameStrip("Preparing comparison frames...");
   }
   video.style.visibility = "visible";
+  video.closest(".video-pane")?.classList.add("loaded");
   video.src = URL.createObjectURL(file);
   video.load();
   emptyEl.hidden = true;
@@ -83,6 +101,7 @@ function loadVideo(file, video, emptyEl) {
     updateTimeline(video, video === videoA ? $("#timelineA") : $("#timelineB"));
     if (isPrimaryVideo) updateTimelineTracks(file, "video", video.duration);
     if (isPrimaryVideo) await generateFrameStrip(video);
+    else await generateCompareFrameStrip(video);
   }, { once: true });
 }
 
@@ -111,7 +130,6 @@ function loadImage(file, emptyEl) {
 
 function loadMedia(file, video, emptyEl) {
   if (!file) return;
-  addImportedMediaItem(file);
   if (file.type.startsWith("image/") && video === videoA) {
     loadImage(file, emptyEl);
     updateTimelineTracks(file, "image", 0);
@@ -120,11 +138,40 @@ function loadMedia(file, video, emptyEl) {
   loadVideo(file, video, emptyEl);
 }
 
+function importMediaFile(file) {
+  if (!file) return;
+  const media = {
+    id: crypto.randomUUID(),
+    file,
+    kind: file.type.startsWith("image/") ? "Image" : "Video"
+  };
+  state.libraryMedia.unshift(media);
+  addImportedMediaItem(media);
+}
+
+function getLibraryMedia(id) {
+  return state.libraryMedia.find((media) => media.id === id);
+}
+
+function assignMediaToPane(media, pane) {
+  if (!media) return;
+  if (pane === "comparison" && !media.file.type.startsWith("video/")) {
+    alert("Comparison supports video files. Drag a video from the Library into this window.");
+    return;
+  }
+  const isComparison = pane === "comparison";
+  loadMedia(media.file, isComparison ? videoB : videoA, $(isComparison ? "#emptyB" : "#emptyA"));
+  document.querySelectorAll(".media-item").forEach((item) => {
+    item.classList.toggle("active", item.dataset.mediaId === media.id);
+  });
+}
+
 function updateTimeline(video, range) {
   const duration = Number.isFinite(video.duration) ? video.duration : 0;
   range.value = duration ? Math.round((video.currentTime / duration) * 1000) : 0;
   $(video === videoA ? "#timeA" : "#timeB").textContent = formatTime(video.currentTime);
   if (video === videoA) updateFrameStripSelection(video.currentTime);
+  if (video === videoB) updateCompareFrameStripSelection(video.currentTime);
 }
 
 function seekVideo(video, range) {
@@ -132,10 +179,10 @@ function seekVideo(video, range) {
   seekToVideoTime(video, (Number(range.value) / 1000) * video.duration);
 }
 
-function stepFrame(direction) {
-  if (!videoA.src) return;
-  videoA.pause();
-  seekToVideoTime(videoA, videoA.currentTime + direction / state.frameRate);
+function stepFrame(direction, video = videoA) {
+  if (!video.src) return;
+  video.pause();
+  seekToVideoTime(video, video.currentTime + direction / state.frameRate);
 }
 
 function seekToVideoTime(video, time) {
@@ -150,24 +197,81 @@ function seekToVideoTime(video, time) {
   video.currentTime = Math.max(0, Math.min(video.duration, time));
 }
 
+function setPlaybackButton(button, video) {
+  if (!button) return;
+  button.textContent = video.paused ? "Play" : "Pause";
+}
+
+function togglePlayback(video, button) {
+  if (!video.src) return;
+  if (video.paused) {
+    video.play();
+  } else {
+    video.pause();
+  }
+  setPlaybackButton(button, video);
+}
+
 function clearFrameStrip(status = "Add a video to inspect frames") {
-  if (!frameStrip || !frameStripStatus) return;
-  state.frameStripRun += 1;
-  frameStrip.innerHTML = "";
-  frameStripStatus.textContent = status || "";
+  clearVideoFrameStrip({
+    strip: frameStrip,
+    statusEl: frameStripStatus,
+    runKey: "frameStripRun",
+    status
+  });
+}
+
+function clearCompareFrameStrip(status = "Add a comparison video to inspect frames") {
+  clearVideoFrameStrip({
+    strip: compareFrameStrip,
+    statusEl: compareFrameStripStatus,
+    runKey: "compareFrameStripRun",
+    status
+  });
+}
+
+function clearVideoFrameStrip({ strip, statusEl, runKey, status }) {
+  if (!strip || !statusEl) return;
+  state[runKey] += 1;
+  strip.innerHTML = "";
+  statusEl.textContent = status || "";
 }
 
 async function generateFrameStrip(video) {
-  if (!frameStrip || !frameStripStatus) return;
+  return generateVideoFrameStrip({
+    video,
+    strip: frameStrip,
+    statusEl: frameStripStatus,
+    runKey: "frameStripRun",
+    onSelect: (time) => seekToVideoTime(videoA, time),
+    onUpdateSelection: updateFrameStripSelection,
+    clearUnavailable: () => clearFrameStrip("Frames unavailable")
+  });
+}
+
+async function generateCompareFrameStrip(video) {
+  return generateVideoFrameStrip({
+    video,
+    strip: compareFrameStrip,
+    statusEl: compareFrameStripStatus,
+    runKey: "compareFrameStripRun",
+    onSelect: (time) => seekToVideoTime(videoB, time),
+    onUpdateSelection: updateCompareFrameStripSelection,
+    clearUnavailable: () => clearCompareFrameStrip("Comparison frames unavailable")
+  });
+}
+
+async function generateVideoFrameStrip({ video, strip, statusEl, runKey, onSelect, onUpdateSelection, clearUnavailable }) {
+  if (!strip || !statusEl) return;
   if (!Number.isFinite(video.duration) || video.duration <= 0) {
-    clearFrameStrip("Frames unavailable");
+    clearUnavailable();
     return;
   }
 
-  const run = state.frameStripRun + 1;
-  state.frameStripRun = run;
-  frameStrip.innerHTML = "";
-  frameStripStatus.textContent = "Building frame strip...";
+  const run = state[runKey] + 1;
+  state[runKey] = run;
+  strip.innerHTML = "";
+  statusEl.textContent = "Building frame strip...";
 
   const originalTime = video.currentTime || 0;
   const wasPaused = video.paused;
@@ -182,7 +286,7 @@ async function generateFrameStrip(video) {
   const thumbCtx = thumbCanvas.getContext("2d");
 
   for (let index = 0; index < frameCount; index += 1) {
-    if (run !== state.frameStripRun) return;
+    if (run !== state[runKey]) return;
     const frameNumber = Math.min(totalFrames, Math.round(index * step));
     const time = Math.min(video.duration, frameNumber / state.frameRate);
     await seekAndWait(video, time);
@@ -203,14 +307,14 @@ async function generateFrameStrip(video) {
     label.textContent = formatTime(time);
 
     button.append(img, label);
-    button.addEventListener("click", () => seekToVideoTime(videoA, time));
-    frameStrip.append(button);
+    button.addEventListener("click", () => onSelect(time));
+    strip.append(button);
   }
 
   await seekAndWait(video, originalTime);
   if (!wasPaused) await video.play();
-  frameStripStatus.textContent = `${frameCount} frames sampled · scroll to move one frame`;
-  updateFrameStripSelection(video.currentTime);
+  statusEl.textContent = `${frameCount} frames sampled · scroll to move one frame`;
+  onUpdateSelection(video.currentTime);
 }
 
 function seekAndWait(video, time) {
@@ -232,8 +336,16 @@ function seekAndWait(video, time) {
 }
 
 function updateFrameStripSelection(time) {
-  if (!frameStrip) return;
-  const buttons = [...frameStrip.querySelectorAll(".frame-thumb")];
+  updateVideoFrameStripSelection(frameStrip, time);
+}
+
+function updateCompareFrameStripSelection(time) {
+  updateVideoFrameStripSelection(compareFrameStrip, time);
+}
+
+function updateVideoFrameStripSelection(strip, time) {
+  if (!strip) return;
+  const buttons = [...strip.querySelectorAll(".frame-thumb")];
   if (!buttons.length) return;
   let nearest = buttons[0];
   let nearestDistance = Infinity;
@@ -402,7 +514,7 @@ function drawContainedMedia(ctx, source, sourceWidth, sourceHeight, width, heigh
   ctx.drawImage(source, x, y, drawWidth, drawHeight);
 }
 
-function addImportedMediaItem(file) {
+function addImportedMediaItem(media) {
   const library = $(".library-list");
   if (!library) return;
   $("#libraryEmpty")?.remove();
@@ -410,17 +522,26 @@ function addImportedMediaItem(file) {
   const item = document.createElement("button");
   item.className = "media-item active";
   item.type = "button";
-  const kind = file.type.startsWith("image/") ? "Image" : "Video";
+  item.draggable = true;
+  item.dataset.mediaId = media.id;
+  item.setAttribute("aria-label", `Drag ${media.file.name} into a video window`);
   const thumb = document.createElement("span");
   thumb.className = "media-thumb imported";
   const copy = document.createElement("span");
   copy.className = "media-copy";
   const title = document.createElement("strong");
-  title.textContent = file.name;
+  title.textContent = media.file.name;
   const meta = document.createElement("small");
-  meta.textContent = `${kind} · Just added`;
+  meta.textContent = `${media.kind} · Drag to a window`;
   copy.append(title, meta);
   item.append(thumb, copy);
+  item.addEventListener("click", () => {
+    document.querySelectorAll(".media-item").forEach((el) => el.classList.toggle("active", el === item));
+  });
+  item.addEventListener("dragstart", (event) => {
+    event.dataTransfer.setData("text/plain", media.id);
+    event.dataTransfer.effectAllowed = "copy";
+  });
   library.prepend(item);
 }
 
@@ -446,73 +567,84 @@ function updateTimelineTracks(file, kind, duration = 0) {
   }
 }
 
-function getPoint(event) {
-  const rect = annotationCanvas.getBoundingClientRect();
+function getPoint(event, canvas = annotationCanvas) {
+  const rect = canvas.getBoundingClientRect();
   return {
     x: event.clientX - rect.left,
     y: event.clientY - rect.top
   };
 }
 
-function redraw(preview = null) {
-  const rect = annotationCanvas.getBoundingClientRect();
-  annotationCtx.clearRect(0, 0, rect.width, rect.height);
-  [...state.annotations, preview].filter(Boolean).forEach(drawAnnotation);
+function getAnnotationSurface(target = "original") {
+  return target === "comparison"
+    ? { canvas: compareAnnotationCanvas, ctx: compareAnnotationCtx, annotations: state.compareAnnotations }
+    : { canvas: annotationCanvas, ctx: annotationCtx, annotations: state.annotations };
 }
 
-function drawAnnotation(item) {
-  annotationCtx.save();
-  annotationCtx.strokeStyle = item.color;
-  annotationCtx.fillStyle = item.color;
-  annotationCtx.lineWidth = item.width;
-  annotationCtx.lineCap = "round";
-  annotationCtx.lineJoin = "round";
+function redraw(target = "original", preview = null) {
+  const { canvas, ctx, annotations } = getAnnotationSurface(target);
+  const rect = canvas.getBoundingClientRect();
+  ctx.clearRect(0, 0, rect.width, rect.height);
+  [...annotations, preview].filter(Boolean).forEach((item) => drawAnnotation(item, ctx));
+}
+
+function drawAnnotation(item, ctx = annotationCtx) {
+  ctx.save();
+  ctx.strokeStyle = item.color;
+  ctx.fillStyle = item.color;
+  ctx.lineWidth = item.width;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
 
   if (item.type === "draw") {
-    annotationCtx.beginPath();
+    ctx.beginPath();
     item.points.forEach((point, index) => {
-      if (index === 0) annotationCtx.moveTo(point.x, point.y);
-      else annotationCtx.lineTo(point.x, point.y);
+      if (index === 0) ctx.moveTo(point.x, point.y);
+      else ctx.lineTo(point.x, point.y);
     });
-    annotationCtx.stroke();
+    ctx.stroke();
   }
 
   if (item.type === "line" || item.type === "arrow") {
-    annotationCtx.beginPath();
-    annotationCtx.moveTo(item.start.x, item.start.y);
-    annotationCtx.lineTo(item.end.x, item.end.y);
-    annotationCtx.stroke();
-    if (item.type === "arrow") drawArrowHead(item.start, item.end, item.color, item.width);
+    ctx.beginPath();
+    ctx.moveTo(item.start.x, item.start.y);
+    ctx.lineTo(item.end.x, item.end.y);
+    ctx.stroke();
+    if (item.type === "arrow") drawArrowHead(item.start, item.end, item.color, item.width, ctx);
   }
 
   if (item.type === "circle") {
     const radius = Math.hypot(item.end.x - item.start.x, item.end.y - item.start.y);
-    annotationCtx.beginPath();
-    annotationCtx.arc(item.start.x, item.start.y, radius, 0, Math.PI * 2);
-    annotationCtx.stroke();
+    ctx.beginPath();
+    ctx.arc(item.start.x, item.start.y, radius, 0, Math.PI * 2);
+    ctx.stroke();
   }
 
   if (item.type === "text") {
-    annotationCtx.font = "700 18px Inter, system-ui, sans-serif";
-    annotationCtx.fillText(item.text, item.start.x, item.start.y);
+    ctx.font = "400 18px Inter, system-ui, sans-serif";
+    ctx.fillText(item.text, item.start.x, item.start.y);
   }
 
-  annotationCtx.restore();
+  ctx.restore();
 }
 
-function drawArrowHead(start, end, color, width) {
+function drawArrowHead(start, end, color, width, ctx = annotationCtx) {
   const angle = Math.atan2(end.y - start.y, end.x - start.x);
   const size = Math.max(12, width * 4);
-  annotationCtx.fillStyle = color;
-  annotationCtx.beginPath();
-  annotationCtx.moveTo(end.x, end.y);
-  annotationCtx.lineTo(end.x - size * Math.cos(angle - Math.PI / 6), end.y - size * Math.sin(angle - Math.PI / 6));
-  annotationCtx.lineTo(end.x - size * Math.cos(angle + Math.PI / 6), end.y - size * Math.sin(angle + Math.PI / 6));
-  annotationCtx.closePath();
-  annotationCtx.fill();
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(end.x, end.y);
+  ctx.lineTo(end.x - size * Math.cos(angle - Math.PI / 6), end.y - size * Math.sin(angle - Math.PI / 6));
+  ctx.lineTo(end.x - size * Math.cos(angle + Math.PI / 6), end.y - size * Math.sin(angle + Math.PI / 6));
+  ctx.closePath();
+  ctx.fill();
 }
 
 function saveAnnotatedFrame() {
+  if (state.videoView === "compare") {
+    saveComparisonFrame();
+    return;
+  }
   if (!state.captured) captureFrame();
   if (!state.captured) return;
   const output = document.createElement("canvas");
@@ -529,11 +661,40 @@ function saveAnnotatedFrame() {
     note: $("#notesInput").value,
     created_at: new Date().toISOString(),
     image: output.toDataURL("image/png"),
+    source: "Original",
     annotations: state.annotations
   };
   state.savedFrames.unshift(frame);
   localStorage.setItem("diamondframe.frames", JSON.stringify(state.savedFrames));
   renderSavedFrames();
+}
+
+function saveComparisonFrame() {
+  if (!videoB.src || !videoB.videoWidth || !videoB.videoHeight) return;
+  const output = document.createElement("canvas");
+  output.width = compareAnnotationCanvas.width;
+  output.height = compareAnnotationCanvas.height;
+  const ctx = output.getContext("2d");
+  drawContainedVideo(ctx, videoB, output.width, output.height);
+  ctx.drawImage(compareAnnotationCanvas, 0, 0);
+  const frame = {
+    id: crypto.randomUUID(),
+    user_id: state.user?.id || "demo-user",
+    athlete: $("#athleteInput").value,
+    session_date: $("#sessionInput").value,
+    note: $("#notesInput").value,
+    created_at: new Date().toISOString(),
+    image: output.toDataURL("image/png"),
+    source: "Comparison",
+    annotations: state.compareAnnotations
+  };
+  state.savedFrames.unshift(frame);
+  localStorage.setItem("diamondframe.frames", JSON.stringify(state.savedFrames));
+  renderSavedFrames();
+}
+
+function getActiveAnnotationTarget() {
+  return state.videoView === "compare" ? "comparison" : state.drawingTarget;
 }
 
 function renderSavedFrames() {
@@ -545,19 +706,50 @@ function renderSavedFrames() {
       <img src="${frame.image}" alt="Saved annotated frame for athlete ${frame.athlete || "Athlete"}" />
       <div>
         <strong>${frame.athlete || "Athlete"}</strong>
-        <span>${frame.session_date || "No date"} · ${new Date(frame.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+        <span>${frame.source || "Original"} · ${frame.session_date || "No date"} · ${new Date(frame.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
       </div>
     </article>
   `).join("");
 }
 
-function setCompareMode(force = !state.comparing) {
-  state.comparing = force;
-  $("#videoLayout").classList.toggle("comparing", state.comparing);
-  $("#app").classList.toggle("comparing-shell", state.comparing);
+function setVideoView(view) {
+  state.videoView = view;
+  state.comparing = view === "split";
+  const isCompareOnly = view === "compare";
+  const layout = $("#videoLayout");
+  const app = $("#app");
+
+  layout.classList.toggle("comparing", state.comparing);
+  layout.classList.toggle("compare-only", isCompareOnly);
+  app.classList.toggle("comparing-shell", state.comparing);
+  app.classList.toggle("compare-only-shell", isCompareOnly);
   $("#compareBtn").classList.toggle("active", state.comparing);
   document.querySelector('[data-action="compare"]').classList.toggle("active", state.comparing);
-  if (state.comparing && !videoB.src) fileB.click();
+  document.querySelectorAll("[data-video-view]").forEach((button) => {
+    button.classList.toggle("selected", button.dataset.videoView === view);
+  });
+
+  requestAnimationFrame(resizeCanvases);
+}
+
+function setCompareMode(force = !state.comparing) {
+  setVideoView(force ? "split" : "primary");
+}
+
+function setupPaneDropTarget(pane, target) {
+  pane.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    pane.classList.add("drag-over");
+  });
+  pane.addEventListener("dragleave", (event) => {
+    if (!pane.contains(event.relatedTarget)) pane.classList.remove("drag-over");
+  });
+  pane.addEventListener("drop", (event) => {
+    event.preventDefault();
+    pane.classList.remove("drag-over");
+    assignMediaToPane(getLibraryMedia(event.dataTransfer.getData("text/plain")), target);
+  });
 }
 
 function updateAccess() {
@@ -679,53 +871,73 @@ document.querySelectorAll("[data-inspector-tab]").forEach((button) => {
     $("#aiPanel").hidden = tab !== "ai";
     $("#notesPanel").hidden = tab !== "notes";
     $("#framesPanel").hidden = tab !== "frames";
+    if (tab === "frames") saveAnnotatedFrame();
   });
 });
 
 $("#aiAnalyzeBtn").addEventListener("click", runAiAnalysis);
 
-annotationCanvas.addEventListener("pointerdown", (event) => {
-  if (!state.captured) captureFrame();
-  state.drawing = true;
-  state.start = getPoint(event);
-  state.currentPath = [state.start];
-  annotationCanvas.setPointerCapture(event.pointerId);
-});
+function setupAnnotationCanvas(canvas, target) {
+  canvas.addEventListener("pointerdown", (event) => {
+    if (target === "original" && !state.captured) captureFrame();
+    state.drawingTarget = target;
+    state.drawing = true;
+    state.start = getPoint(event, canvas);
+    state.currentPath = [state.start];
+    canvas.setPointerCapture(event.pointerId);
+  });
 
-annotationCanvas.addEventListener("pointermove", (event) => {
-  if (!state.drawing) return;
-  const point = getPoint(event);
-  if (state.tool === "draw") {
-    state.currentPath.push(point);
-    redraw({ type: "draw", points: state.currentPath, color: state.color, width: state.width });
-  } else {
-    redraw({ type: state.tool, start: state.start, end: point, color: state.color, width: state.width, text: "Coach note" });
-  }
-});
+  canvas.addEventListener("pointermove", (event) => {
+    if (!state.drawing || state.drawingTarget !== target) return;
+    const point = getPoint(event, canvas);
+    if (state.tool === "draw") {
+      state.currentPath.push(point);
+      redraw(target, { type: "draw", points: state.currentPath, color: state.color, width: state.width });
+    } else {
+      redraw(target, { type: state.tool, start: state.start, end: point, color: state.color, width: state.width, text: "Coach note" });
+    }
+  });
 
-annotationCanvas.addEventListener("pointerup", (event) => {
-  if (!state.drawing) return;
-  const point = getPoint(event);
-  state.drawing = false;
-  if (state.tool === "text") {
-    const text = prompt("Text note", "Hold posture through contact");
-    if (text) state.annotations.push({ type: "text", start: point, text, color: state.color, width: state.width });
-  } else if (state.tool === "draw") {
-    state.annotations.push({ type: "draw", points: state.currentPath, color: state.color, width: state.width });
-  } else {
-    state.annotations.push({ type: state.tool, start: state.start, end: point, color: state.color, width: state.width });
-  }
-  redraw();
-});
+  canvas.addEventListener("pointerup", (event) => {
+    if (!state.drawing || state.drawingTarget !== target) return;
+    const point = getPoint(event, canvas);
+    const annotations = getAnnotationSurface(target).annotations;
+    state.drawing = false;
+    if (state.tool === "text") {
+      const text = prompt("Text note", "Hold posture through contact");
+      if (text) annotations.push({ type: "text", start: point, text, color: state.color, width: state.width });
+    } else if (state.tool === "draw") {
+      annotations.push({ type: "draw", points: state.currentPath, color: state.color, width: state.width });
+    } else {
+      annotations.push({ type: state.tool, start: state.start, end: point, color: state.color, width: state.width });
+    }
+    redraw(target);
+  });
 
-fileA.addEventListener("change", () => loadMedia(fileA.files[0], videoA, $("#emptyA")));
-fileB.addEventListener("change", () => loadVideo(fileB.files[0], videoB, $("#emptyB")));
+  canvas.addEventListener("pointercancel", () => {
+    if (state.drawingTarget !== target) return;
+    state.drawing = false;
+    redraw(target);
+  });
+}
+
+setupAnnotationCanvas(annotationCanvas, "original");
+setupAnnotationCanvas(compareAnnotationCanvas, "comparison");
+
+fileA.addEventListener("change", () => {
+  [...fileA.files].forEach(importMediaFile);
+  fileA.value = "";
+});
 $("#uploadBtn").addEventListener("click", () => fileA.click());
-$("#addMediaBtn").addEventListener("click", () => fileA.click());
-$("#emptyB").addEventListener("click", () => fileB.click());
+$("#emptyB").addEventListener("click", () => setVideoView("compare"));
 document.querySelector('[data-action="upload"]').addEventListener("click", () => fileA.click());
 document.querySelector('[data-action="compare"]').addEventListener("click", () => setCompareMode());
 $("#compareBtn").addEventListener("click", () => setCompareMode());
+document.querySelectorAll("[data-video-view]").forEach((button) => {
+  button.addEventListener("click", () => setVideoView(button.dataset.videoView));
+});
+setupPaneDropTarget($(".primary-pane"), "original");
+setupPaneDropTarget($("#comparePane"), "comparison");
 $("#annotateBtn").addEventListener("click", captureFrame);
 $("#saveFrameBtn").addEventListener("click", saveAnnotatedFrame);
 $("#exportBtn").addEventListener("click", exportReport);
@@ -734,31 +946,51 @@ $("#playBtn").addEventListener("click", () => {
   if (videoA.paused) {
     videoA.play();
     if ($("#syncToggle").checked && videoB.src) videoB.play();
-    $("#playBtn").textContent = "Pause";
   } else {
     videoA.pause();
     videoB.pause();
-    $("#playBtn").textContent = "Play";
   }
+  setPlaybackButton($("#playBtn"), videoA);
+  setPlaybackButton($("#comparePlayBtn"), videoB);
 });
-$("#backFrameBtn").addEventListener("click", () => stepFrame(-1));
-$("#nextFrameBtn").addEventListener("click", () => stepFrame(1));
+$("#backFrameBtn").addEventListener("click", () => stepFrame(-1, videoA));
+$("#nextFrameBtn").addEventListener("click", () => stepFrame(1, videoA));
+$("#comparePlayBtn").addEventListener("click", () => togglePlayback(videoB, $("#comparePlayBtn")));
+$("#compareBackFrameBtn").addEventListener("click", () => stepFrame(-1, videoB));
+$("#compareNextFrameBtn").addEventListener("click", () => stepFrame(1, videoB));
 $("#timelineA").addEventListener("input", () => seekVideo(videoA, $("#timelineA")));
 $("#timelineB").addEventListener("input", () => seekVideo(videoB, $("#timelineB")));
 if (frameStrip) {
   frameStrip.addEventListener("wheel", (event) => {
     if (!videoA.src) return;
     event.preventDefault();
-    stepFrame(event.deltaY > 0 || event.deltaX > 0 ? 1 : -1);
+    stepFrame(event.deltaY > 0 || event.deltaX > 0 ? 1 : -1, videoA);
   }, { passive: false });
   frameStrip.addEventListener("keydown", (event) => {
     if (event.key === "ArrowLeft") {
       event.preventDefault();
-      stepFrame(-1);
+      stepFrame(-1, videoA);
     }
     if (event.key === "ArrowRight") {
       event.preventDefault();
-      stepFrame(1);
+      stepFrame(1, videoA);
+    }
+  });
+}
+if (compareFrameStrip) {
+  compareFrameStrip.addEventListener("wheel", (event) => {
+    if (!videoB.src) return;
+    event.preventDefault();
+    stepFrame(event.deltaY > 0 || event.deltaX > 0 ? 1 : -1, videoB);
+  }, { passive: false });
+  compareFrameStrip.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      stepFrame(-1, videoB);
+    }
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      stepFrame(1, videoB);
     }
   });
 }
@@ -766,17 +998,26 @@ videoA.addEventListener("timeupdate", () => updateTimeline(videoA, $("#timelineA
 videoB.addEventListener("timeupdate", () => updateTimeline(videoB, $("#timelineB")));
 videoA.addEventListener("play", () => {
   if ($("#syncToggle").checked && videoB.src && videoB.paused) videoB.play();
+  setPlaybackButton($("#playBtn"), videoA);
+  setPlaybackButton($("#comparePlayBtn"), videoB);
 });
 videoA.addEventListener("pause", () => {
   if ($("#syncToggle").checked && videoB.src && !videoB.paused) videoB.pause();
+  setPlaybackButton($("#playBtn"), videoA);
+  setPlaybackButton($("#comparePlayBtn"), videoB);
 });
+videoB.addEventListener("play", () => setPlaybackButton($("#comparePlayBtn"), videoB));
+videoB.addEventListener("pause", () => setPlaybackButton($("#comparePlayBtn"), videoB));
 $("#undoBtn").addEventListener("click", () => {
-  state.annotations.pop();
-  redraw();
+  const target = getActiveAnnotationTarget();
+  getAnnotationSurface(target).annotations.pop();
+  redraw(target);
 });
 $("#clearBtn").addEventListener("click", () => {
-  state.annotations = [];
-  redraw();
+  const target = getActiveAnnotationTarget();
+  if (target === "comparison") state.compareAnnotations = [];
+  else state.annotations = [];
+  redraw(target);
 });
 const authBtn = $("#authBtn");
 if (authBtn) authBtn.addEventListener("click", () => $("#authDialog").showModal());
