@@ -1,0 +1,16 @@
+{
+  "name": "diamond-frame",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "start": "vite --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.1",
+    "stripe": "^17.7.0",
+    "vite": "^6.2.0"
+  },
+  "devDependencies": {}
+}

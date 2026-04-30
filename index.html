@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DiamondFrame</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <div id="app" class="app-shell editor-shell">
+      <aside class="tool-rail" aria-label="Analysis tools">
+        <div class="brand-mark" aria-label="DiamondFrame">DF</div>
+        <button class="tool-button active" data-action="upload" title="Upload video">
+          <span aria-hidden="true">⇩</span>
+          <small>Import</small>
+        </button>
+        <button class="tool-button" data-action="compare" title="Compare videos">
+          <span aria-hidden="true">▥</span>
+          <small>Compare</small>
+        </button>
+        <div class="rail-divider"></div>
+        <button class="tool-button active" data-tool="draw" title="Draw freehand">
+          <span aria-hidden="true">✎</span>
+          <small>Draw</small>
+        </button>
+        <button class="tool-button" data-tool="line" title="Straight line">
+          <span aria-hidden="true">╱</span>
+          <small>Line</small>
+        </button>
+        <button class="tool-button" data-tool="arrow" title="Arrow">
+          <span aria-hidden="true">↗</span>
+          <small>Arrow</small>
+        </button>
+        <button class="tool-button" data-tool="circle" title="Circle">
+          <span aria-hidden="true">○</span>
+          <small>Circle</small>
+        </button>
+        <button class="tool-button" data-tool="text" title="Text note">
+          <span aria-hidden="true">T</span>
+          <small>Text</small>
+        </button>
+        <div class="rail-divider"></div>
+        <button class="tool-button" id="undoBtn" title="Undo annotation">
+          <span aria-hidden="true">↶</span>
+          <small>Undo</small>
+        </button>
+        <button class="tool-button danger" id="clearBtn" title="Delete annotations">
+          <span aria-hidden="true">⌫</span>
+          <small>Delete</small>
+        </button>
+      </aside>
+
+      <main class="workbench">
+        <header class="topbar">
+          <div>
+            <h1>New Project</h1>
+            <p>1080p HD 23.98fps</p>
+          </div>
+          <nav class="top-actions" aria-label="Primary actions">
+            <button class="ghost-button active-view" id="editorNavBtn">Editor</button>
+            <button class="ghost-button" id="dashboardNavBtn">Dashboard</button>
+            <button class="primary-button" id="uploadBtn">Upload</button>
+            <button class="primary-button accent" id="exportBtn">Export</button>
+          </nav>
+        </header>
+
+        <section class="editor-grid" aria-label="Video editor">
+          <aside class="media-browser" aria-label="Media library">
+            <div class="browser-top">
+              <h2>Library</h2>
+              <div class="browser-actions">
+                <button type="button" id="addMediaBtn" title="Add video or image">+</button>
+              </div>
+            </div>
+            <div class="library-list" id="libraryList">
+              <div class="library-empty" id="libraryEmpty">
+                <strong>No media yet</strong>
+                <span>Upload a video or image to add it to this project.</span>
+              </div>
+            </div>
+          </aside>
+
+          <section class="stage" aria-label="Video preview and annotations">
+            <div class="preview-header">
+              <div>
+                <h2>Preview</h2>
+                <span>Frame-by-frame mechanics analysis</span>
+              </div>
+            </div>
+            <div class="stage-toolbar">
+              <label class="field mini">
+                Color
+                <input id="colorInput" type="color" value="#ff7a59" />
+              </label>
+              <label class="field thickness">
+                Thickness
+                <input id="widthInput" type="range" min="2" max="14" value="5" />
+              </label>
+              <label class="toggle">
+                <input type="checkbox" id="syncToggle" />
+                Sync playback
+              </label>
+            </div>
+
+            <div class="video-layout" id="videoLayout">
+              <article class="video-pane primary-pane">
+                <video id="videoA" playsinline></video>
+                <canvas id="captureCanvas"></canvas>
+                <canvas id="annotationCanvas"></canvas>
+                <div class="empty-state" id="emptyA">
+                  <strong>Drop in a training video or still image</strong>
+                  <span>Scrub frame by frame, capture the moment, and draw technique notes directly on the still.</span>
+                </div>
+              </article>
+              <article class="video-pane compare-pane" id="comparePane">
+                <div class="pane-label">Progress comparison</div>
+                <video id="videoB" playsinline></video>
+                <div class="empty-state compact-empty" id="emptyB">
+                  <strong>Upload comparison video</strong>
+                  <span>Click here to add a different video beside the main player.</span>
+                </div>
+              </article>
+            </div>
+            <section class="frame-strip-panel" aria-label="Video frames">
+              <div class="frame-strip-head">
+                <strong>Frames</strong>
+                <span id="frameStripStatus">Add a video to inspect frames</span>
+              </div>
+              <div class="frame-strip" id="frameStrip" tabindex="0" aria-label="Scroll frame by frame"></div>
+            </section>
+            <div class="preview-transport" aria-label="Playback controls">
+              <button id="playBtn">Play</button>
+              <button id="backFrameBtn" title="Back 1 frame" aria-label="Back 1 frame">&lt;</button>
+              <button id="nextFrameBtn" title="Forward 1 frame" aria-label="Forward 1 frame">&gt;</button>
+            </div>
+          </section>
+
+          <aside class="inspector" aria-label="Notes and saved frames">
+            <div class="inspector-title">
+              <h2>Inspector</h2>
+              <div class="inspector-tabs" role="tablist" aria-label="Inspector sections">
+                <button class="selected" type="button" id="aiTabBtn" data-inspector-tab="ai">AI Coach</button>
+                <button type="button" id="notesTabBtn" data-inspector-tab="notes">Mechanics Notes</button>
+                <button type="button" id="framesTabBtn" data-inspector-tab="frames">Saved Frames</button>
+              </div>
+            </div>
+
+            <section class="inspector-panel ai-panel selected" id="aiPanel" aria-live="polite">
+              <div class="panel-heading">
+                <h2>AI Coach</h2>
+                <button id="aiAnalyzeBtn" type="button">Analyze</button>
+                <span id="aiConfidence">Ready</span>
+              </div>
+              <div class="ai-result" id="aiResult">
+                <p>Add a video, then select Analysis to detect the sport and get technique feedback from sampled frames.</p>
+              </div>
+            </section>
+
+            <section class="inspector-panel" id="notesPanel" hidden>
+              <div class="panel-heading">
+                <h2>Mechanics Notes</h2>
+                <button id="saveNoteBtn">Save</button>
+              </div>
+              <textarea id="notesInput" placeholder="Posture, balance, timing, joint angles, alignment, body position, tempo, stability, control, follow-through..."></textarea>
+            </section>
+
+            <section class="inspector-panel" id="framesPanel" hidden>
+              <div class="panel-heading">
+                <h2>Saved Frames</h2>
+                <span id="frameCount">0</span>
+              </div>
+              <div class="saved-list" id="savedFrames"></div>
+            </section>
+          </aside>
+        </section>
+
+        <section class="dashboard-view" id="dashboardView" aria-label="Dashboard" hidden>
+          <header class="dashboard-header">
+            <div>
+              <h2>Dashboard</h2>
+              <p>Projects, workspace settings, and billing for your private coach account.</p>
+            </div>
+            <button class="primary-button" id="dashboardUploadBtn">New Upload</button>
+          </header>
+
+          <div class="dashboard-grid">
+            <section class="dashboard-panel projects-dashboard">
+              <div class="panel-heading">
+                <h2>All Projects</h2>
+                <span>3</span>
+              </div>
+              <div class="dashboard-projects">
+                <article class="dashboard-project active-project">
+                  <div class="project-thumb technique"></div>
+                  <div>
+                    <strong>Posture Check</strong>
+                    <span>Maya Rodriguez · Technique · Today</span>
+                    <small>Saved frames: 4 · Last edited 3:30 PM</small>
+                  </div>
+                  <button type="button" data-open-editor>Edit</button>
+                </article>
+                <article class="dashboard-project">
+                  <div class="project-thumb form"></div>
+                  <div>
+                    <strong>Balance Review</strong>
+                    <span>Evan Kim · Form · Yesterday</span>
+                    <small>Saved frames: 2 · Report drafted</small>
+                  </div>
+                  <button type="button" data-open-editor>Edit</button>
+                </article>
+                <article class="dashboard-project">
+                  <div class="project-thumb progress"></div>
+                  <div>
+                    <strong>Before / After Progress</strong>
+                    <span>Jordan Lee · Compare mode · Apr 22</span>
+                    <small>Saved frames: 8 · Shared with parent</small>
+                  </div>
+                  <button type="button" data-open-editor>Edit</button>
+                </article>
+              </div>
+            </section>
+
+            <section class="dashboard-panel settings-panel">
+              <div class="panel-heading">
+                <h2>Settings</h2>
+              </div>
+              <label class="field">
+                Default athlete
+                <input value="Maya Rodriguez" />
+              </label>
+              <label class="field">
+                Coach display name
+                <input value="Coach Rivera" />
+              </label>
+              <label class="field">
+                Report footer
+                <input value="Session notes prepared in DiamondFrame" />
+              </label>
+              <label class="toggle dashboard-toggle">
+                <input type="checkbox" checked />
+                Include saved frames in reports
+              </label>
+            </section>
+
+            <section class="dashboard-panel billing-panel">
+              <div class="panel-heading">
+                <h2>Billing</h2>
+              </div>
+              <section class="plan-card">
+                <span id="planLabel">Free workspace</span>
+                <strong id="accessLabel">Upgrade for compare, reports, and exports</strong>
+                <button id="checkoutBtn">Start Pro</button>
+                <button id="portalBtn" class="subtle">Billing portal</button>
+              </section>
+              <div class="billing-actions">
+                <button class="ghost-button" id="pricingBtn">View pricing</button>
+                <button class="ghost-button" id="dashboardPortalBtn">Manage subscription</button>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <footer class="timeline" aria-label="Timeline controls">
+          <div class="timeline-head">
+            <strong>Timeline</strong>
+            <span>Sequence 01</span>
+            <span>01:24:12</span>
+          </div>
+          <div class="transport">
+            <button id="saveFrameBtn" class="accent">Save Frame</button>
+            <button id="compareBtn">Compare</button>
+            <button id="annotateBtn">Annotate</button>
+          </div>
+          <div class="timeline-stack">
+            <label>
+              A
+              <input id="timelineA" type="range" min="0" max="1000" value="0" />
+              <span id="timeA">00:00.00</span>
+            </label>
+            <label id="timelineBRow">
+              B
+              <input id="timelineB" type="range" min="0" max="1000" value="0" />
+              <span id="timeB">00:00.00</span>
+            </label>
+          </div>
+          <div class="track-stack" aria-hidden="true">
+            <div class="track-row main-track" id="videoTrack"><span>V1</span><div class="track-clips"></div></div>
+            <div class="track-row audio-track" id="audioTrack"><span>A1</span><div class="track-clips"></div></div>
+          </div>
+        </footer>
+      </main>
+
+      <input id="fileA" type="file" accept="video/*,image/*" hidden />
+      <input id="fileB" type="file" accept="video/*" hidden />
+      <input id="athleteInput" value="Maya Rodriguez" hidden />
+      <input id="sessionInput" type="date" hidden />
+    </div>
+
+    <dialog id="authDialog" class="modal">
+      <form method="dialog" class="modal-card" id="authForm">
+        <button class="close-button" type="button" data-close="authDialog" aria-label="Close">x</button>
+        <h2>Coach Workspace</h2>
+        <p>Sign in to keep athletes, videos, frames, reports, and billing private to your account.</p>
+        <label class="field">
+          Email
+          <input id="emailInput" type="email" placeholder="coach@example.com" required />
+        </label>
+        <label class="field">
+          Password
+          <input id="passwordInput" type="password" minlength="6" placeholder="••••••••" required />
+        </label>
+        <div class="modal-actions">
+          <button id="loginBtn" class="primary-button" value="login">Log in</button>
+          <button id="signupBtn" class="ghost-button" value="signup">Create account</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="pricingDialog" class="modal">
+      <form method="dialog" class="modal-card pricing-modal">
+        <button class="close-button" type="button" data-close="pricingDialog" aria-label="Close">x</button>
+        <h2>Plans</h2>
+        <div class="pricing-grid">
+          <article>
+            <h3>Free</h3>
+            <strong>$0</strong>
+            <p>Single-video analysis, five uploads, basic saved frames.</p>
+          </article>
+          <article class="featured">
+            <h3>Pro Coach</h3>
+            <strong>$19/mo</strong>
+            <p>Compare mode, unlimited uploads, reports, image sets, and exports.</p>
+            <button id="pricingCheckoutBtn" class="primary-button accent" value="checkout">Checkout</button>
+          </article>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>
