@@ -10,10 +10,6 @@
     <div id="app" class="app-shell editor-shell">
       <aside class="tool-rail" aria-label="Analysis tools">
         <div class="brand-mark" aria-label="DiamondFrame">DF</div>
-        <button class="tool-button active" data-action="upload" title="Upload video">
-          <span aria-hidden="true">⇩</span>
-          <small>Import</small>
-        </button>
         <button class="tool-button" data-action="compare" title="Compare videos">
           <span aria-hidden="true">▥</span>
           <small>Compare</small>
@@ -79,6 +75,15 @@
             </div>
           </aside>
 
+          <div
+            class="section-resizer library-resizer"
+            id="libraryResizer"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize upload library"
+            tabindex="0"
+          ></div>
+
           <section class="stage" aria-label="Video preview and annotations">
             <div class="preview-header">
               <div>
@@ -103,6 +108,7 @@
                 <button type="button" class="selected" data-video-view="primary">Original</button>
                 <button type="button" data-video-view="compare">Comparison</button>
                 <button type="button" data-video-view="split">Both</button>
+                <button type="button" data-video-view="frame">Frame</button>
               </div>
             </div>
 
@@ -118,10 +124,19 @@
               </article>
               <article class="video-pane compare-pane" id="comparePane">
                 <video id="videoB" playsinline></video>
+                <canvas id="compareCaptureCanvas"></canvas>
                 <canvas id="compareAnnotationCanvas"></canvas>
                 <div class="empty-state compact-empty" id="emptyB">
                   <strong>Drag comparison video here</strong>
                   <span>Import footage with Upload, then drag a video into the Comparison window.</span>
+                </div>
+              </article>
+              <article class="video-pane frame-pane" id="framePane">
+                <canvas id="frameCaptureCanvas"></canvas>
+                <canvas id="frameAnnotationCanvas"></canvas>
+                <div class="empty-state" id="emptyFrame">
+                  <strong>Select a saved frame</strong>
+                  <span>Open Saved Frames, then click an image to review and annotate it here.</span>
                 </div>
               </article>
             </div>
@@ -141,15 +156,33 @@
                 <div class="frame-strip" id="compareFrameStrip" tabindex="0" aria-label="Scroll comparison video frame by frame"></div>
               </section>
             </div>
-            <div class="preview-transport compare-preview-transport" aria-label="Comparison playback controls">
-              <button id="comparePlayBtn" type="button">Play</button>
-              <button id="compareBackFrameBtn" type="button" title="Comparison back 1 frame" aria-label="Comparison back 1 frame">&lt;</button>
-              <button id="compareNextFrameBtn" type="button" title="Comparison forward 1 frame" aria-label="Comparison forward 1 frame">&gt;</button>
-            </div>
-            <div class="preview-transport primary-preview-transport" aria-label="Playback controls">
-              <button id="playBtn">Play</button>
-              <button id="backFrameBtn" title="Back 1 frame" aria-label="Back 1 frame">&lt;</button>
-              <button id="nextFrameBtn" title="Forward 1 frame" aria-label="Forward 1 frame">&gt;</button>
+            <div class="preview-control-layer">
+              <div class="transport-stack">
+                <div class="preview-transport primary-preview-transport" aria-label="Playback controls">
+                  <span class="transport-label">Original</span>
+                  <button id="playBtn">Play</button>
+                  <button id="backFrameBtn" title="Back 1 frame" aria-label="Back 1 frame">&lt;</button>
+                  <button id="nextFrameBtn" title="Forward 1 frame" aria-label="Forward 1 frame">&gt;</button>
+                </div>
+                <div class="preview-transport compare-preview-transport" aria-label="Comparison playback controls">
+                  <span class="transport-label">Comparison</span>
+                  <button id="comparePlayBtn" type="button">Play</button>
+                  <button id="compareBackFrameBtn" type="button" title="Comparison back 1 frame" aria-label="Comparison back 1 frame">&lt;</button>
+                  <button id="compareNextFrameBtn" type="button" title="Comparison forward 1 frame" aria-label="Comparison forward 1 frame">&gt;</button>
+                </div>
+              </div>
+              <div class="timeline-stack">
+                <label>
+                  A
+                  <input id="timelineA" type="range" min="0" max="1000" value="0" />
+                  <span id="timeA">00:00.00</span>
+                </label>
+                <label id="timelineBRow">
+                  B
+                  <input id="timelineB" type="range" min="0" max="1000" value="0" />
+                  <span id="timeB">00:00.00</span>
+                </label>
+              </div>
             </div>
           </section>
 
@@ -165,9 +198,9 @@
 
             <section class="inspector-panel ai-panel selected" id="aiPanel" aria-live="polite">
               <div class="panel-heading">
-                <h2>AI Coach</h2>
                 <button id="aiAnalyzeBtn" type="button">Analyze</button>
-                <span id="aiConfidence">Ready</span>
+                <button id="inspectorSaveFrameBtn" type="button">Saved Frame</button>
+                <span id="aiConfidence" hidden></span>
               </div>
               <div class="ai-result" id="aiResult">
                 <p>Add a video, then select Analysis to detect the sport and get technique feedback from sampled frames.</p>
@@ -185,6 +218,7 @@
             <section class="inspector-panel" id="framesPanel" hidden>
               <div class="panel-heading">
                 <h2>Saved Frames</h2>
+                <button id="panelSaveFrameBtn" type="button">Saved Frame</button>
                 <span id="frameCount">0</span>
               </div>
               <div class="saved-list" id="savedFrames"></div>
@@ -278,6 +312,15 @@
           </div>
         </section>
 
+        <div
+          class="section-resizer timeline-resizer"
+          id="timelineResizer"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize timeline sequence"
+          tabindex="0"
+        ></div>
+
         <footer class="timeline" aria-label="Timeline controls">
           <div class="timeline-head">
             <strong>Timeline</strong>
@@ -288,18 +331,11 @@
             <button id="saveFrameBtn" class="accent">Save Frame</button>
             <button id="compareBtn">Compare</button>
             <button id="annotateBtn">Annotate</button>
-          </div>
-          <div class="timeline-stack">
-            <label>
-              A
-              <input id="timelineA" type="range" min="0" max="1000" value="0" />
-              <span id="timeA">00:00.00</span>
-            </label>
-            <label id="timelineBRow">
-              B
-              <input id="timelineB" type="range" min="0" max="1000" value="0" />
-              <span id="timeB">00:00.00</span>
-            </label>
+            <div class="timeline-tools" aria-label="Timeline editing tools">
+              <button id="selectToolBtn" type="button" class="timeline-tool active" data-edit-tool="select">Select</button>
+              <button id="sliceToolBtn" type="button" class="timeline-tool" data-edit-tool="slice">Slice</button>
+              <button id="muteAudioBtn" type="button" class="timeline-tool" aria-pressed="false">Mute Audio</button>
+            </div>
           </div>
           <div class="track-stack" aria-hidden="true">
             <div class="track-row main-track" id="videoTrack"><span>V1</span><div class="track-clips"></div></div>

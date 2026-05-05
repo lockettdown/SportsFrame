@@ -1,17 +1,19 @@
 const DEFAULT_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 
 const fallbackResult = {
-  sport: "Unknown movement",
-  issue: "Unable to complete AI analysis",
+  sport: "Baseball / softball mechanics",
+  issue: "AI swing and pitching analysis is not connected yet",
   confidence: "low",
   evidence: [
     "The analysis service is not configured yet."
   ],
   corrections: [
-    "Add OPENAI_API_KEY to the server environment and try again."
+    "Add OPENAI_API_KEY to the server environment and try again.",
+    "Use the saved frames to compare setup, load, stride, rotation, contact or release, and finish."
   ],
   drills: [
-    "Use the frame strip to review setup, midpoint, contact or impact, and follow-through manually."
+    "For hitting: pause at launch position, contact, and finish to check balance and barrel path.",
+    "For pitching: pause at leg lift, stride foot strike, release, and follow-through to check timing and direction."
   ],
   disclaimer: "AI feedback is coaching guidance only and is not a medical diagnosis."
 };
@@ -68,7 +70,7 @@ export default async function handler(request, response) {
     const { frames = [], athlete = "Athlete", notes = "" } = body;
     const cleanFrames = frames
       .filter((frame) => typeof frame?.image === "string" && frame.image.startsWith("data:image/"))
-      .slice(0, 12);
+      .slice(0, 30);
 
     if (cleanFrames.length < 1) {
       json(response, 400, { error: "At least one frame image is required" });
@@ -79,12 +81,15 @@ export default async function handler(request, response) {
       {
         type: "input_text",
         text: [
-          "You are a careful sports technique coach analyzing sampled frames from a training video.",
-          "Infer the sport or movement type from the frames. If it is a baseball or softball bat swing, analyze the bat swing. If it is golf, analyze the golf swing. If it is another sport, analyze the visible movement pattern.",
+          "You are a careful baseball and softball technique coach analyzing saved frames from a training session.",
+          "Use all provided frames together as one sequence. First decide whether the athlete appears to be hitting, pitching, or doing another baseball/softball movement.",
+          "If the athlete is hitting, summarize how they can become a better hitter. Focus on stance, load, stride, hip/shoulder separation, head stability, barrel path, contact position, extension, balance, and finish.",
+          "If the athlete is pitching, summarize how to improve pitching mechanics. Focus on leg lift, posture, stride direction, hip/shoulder separation, arm timing, release position, glove-side control, deceleration, and follow-through.",
+          "If both hitting and pitching frames are present, provide separate hitter and pitcher corrections.",
           "Identify the most likely primary technique issue and practical coaching corrections. Avoid medical diagnosis. Do not claim certainty beyond the frames.",
           `Athlete label: ${athlete}`,
           notes ? `Coach notes: ${notes}` : "Coach notes: none",
-          "Return only valid JSON with keys: sport, issue, confidence, evidence, corrections, drills, disclaimer. evidence/corrections/drills must be arrays of short strings."
+          "Return only valid JSON with keys: sport, issue, confidence, evidence, corrections, drills, disclaimer. evidence/corrections/drills must be arrays of short, specific baseball/softball coaching strings."
         ].join("\n")
       },
       ...cleanFrames.flatMap((frame, index) => [
@@ -114,7 +119,7 @@ export default async function handler(request, response) {
             content
           }
         ],
-        max_output_tokens: 900
+        max_output_tokens: 1200
       })
     });
 
