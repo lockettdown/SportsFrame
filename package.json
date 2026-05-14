@@ -4,8 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
-    "start": "vite --host 127.0.0.1"
+    "dev": "node server/dev-server.js",
+    "start": "node server/dev-server.js",
+    "dev:vite": "vite --host 127.0.0.1",
+    "build": "vite build"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",

@@ -29,7 +29,14 @@ const state = {
   analyzing: false,
   libraryMedia: [],
   aiCoachFrames: [],
-  savedFrames: JSON.parse(localStorage.getItem("diamondframe.frames") || "[]"),
+  editingFrameId: null,
+  projectNotes: [],
+  editingNoteId: null,
+  evaluations: [],
+  editingEvaluationId: null,
+  projects: JSON.parse(localStorage.getItem("diamondframe.projects") || "[]"),
+  selectedProjectId: localStorage.getItem("diamondframe.selectedProjectId") || null,
+  savedFrames: [],
   user: JSON.parse(localStorage.getItem("diamondframe.user") || "null"),
   subscription: localStorage.getItem("diamondframe.subscription") || "free",
   captured: false,
@@ -308,15 +315,16 @@ function importMediaFile(file) {
   if (!file) return;
   const media = {
     id: crypto.randomUUID(),
+    projectId: state.selectedProjectId,
     file,
     kind: file.type.startsWith("image/") ? "Image" : "Video"
   };
   state.libraryMedia.unshift(media);
-  addImportedMediaItem(media);
+  renderLibraryMedia();
 }
 
 function getLibraryMedia(id) {
-  return state.libraryMedia.find((media) => media.id === id);
+  return state.libraryMedia.find((media) => media.id === id && media.projectId === state.selectedProjectId);
 }
 
 function assignMediaToPane(media, pane) {
@@ -556,26 +564,134 @@ function getStillImageSample() {
   return [{ image: canvas.toDataURL("image/jpeg", 0.78), time: 0, timeLabel: "Still image" }];
 }
 
+function compressImageForAi(frame, maxWidth = 640) {
+  return new Promise((resolve) => {
+    const image = new Image();
+    image.addEventListener("load", () => {
+      const scale = Math.min(1, maxWidth / image.naturalWidth);
+      const width = Math.max(1, Math.round(image.naturalWidth * scale));
+      const height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(image, 0, 0, width, height);
+      resolve({
+        ...frame,
+        image: canvas.toDataURL("image/jpeg", 0.72)
+      });
+    }, { once: true });
+    image.addEventListener("error", () => resolve(null), { once: true });
+    image.src = frame.image;
+  });
+}
+
+async function prepareFramesForAi(frames) {
+  const cappedFrames = frames.slice(0, 8);
+  const compressedFrames = await Promise.all(cappedFrames.map((frame) => compressImageForAi(frame)));
+  return compressedFrames.filter(Boolean);
+}
+
 function getAiCoachFrameSamples() {
-  const sourceFrames = state.aiCoachFrames.length ? state.aiCoachFrames : state.savedFrames;
+  const sourceFrames = state.savedFrames;
   return sourceFrames
     .filter((frame) => frame?.image)
     .map((frame, index) => ({
       image: frame.image,
       time: index,
-      timeLabel: `${frame.source || "Saved frame"} ${index + 1}`
+      timeLabel: `${frame.source || "Saved frame"} ${index + 1}`,
+      note: frame.note || ""
     }));
 }
 
 function renderAiResult(result, options = {}) {
-  const confidence = $("#aiConfidence");
   const target = $("#aiResult");
   if (!target) return;
-  confidence.textContent = result.confidence ? result.confidence.toUpperCase() : "Done";
-  target.innerHTML = `
+  target.innerHTML = renderAiResultMarkup(result, options);
+}
+
+function createEvaluation(result, frameCount = 0, options = {}) {
+  return {
+    id: crypto.randomUUID(),
+    project_id: state.selectedProjectId,
+    athlete: $("#athleteInput")?.value || "Athlete",
+    created_at: new Date().toISOString(),
+    frameCount,
+    result,
+    demo: Boolean(options.demo)
+  };
+}
+
+function persistEvaluations() {
+  localStorage.setItem(getProjectStorageKey("evaluations"), JSON.stringify(state.evaluations));
+}
+
+function renderEvaluationList() {
+  const list = $("#evaluationList");
+  if (!list) return;
+  if (!state.evaluations.length) {
+    list.innerHTML = "";
+    return;
+  }
+
+  list.innerHTML = state.evaluations.map((evaluation, index) => {
+    const result = evaluation.result || {};
+    const date = new Date(evaluation.created_at);
+    return `
+      <article class="evaluation-item" data-evaluation-id="${evaluation.id}">
+        <div>
+          <strong>${escapeHtml(evaluation.athlete || "Athlete")}</strong>
+          <span>Evaluation ${state.evaluations.length - index} · ${date.toLocaleDateString()} · ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+          <p>${escapeHtml(result.issue || "AI coaching assessment")}</p>
+        </div>
+        <button type="button" data-open-evaluation="${evaluation.id}">Evaluation</button>
+      </article>
+    `;
+  }).join("");
+}
+
+function saveEvaluation(result, frameCount, options = {}) {
+  const evaluation = createEvaluation(result, frameCount, options);
+  state.evaluations.unshift(evaluation);
+  persistEvaluations();
+  renderEvaluationList();
+  return evaluation;
+}
+
+function openEvaluation(evaluationId) {
+  const evaluation = state.evaluations.find((item) => item.id === evaluationId);
+  if (!evaluation) return;
+  state.editingEvaluationId = evaluation.id;
+  const body = $("#evaluationDialogBody");
+  if (body) {
+    body.innerHTML = `
+      <div class="evaluation-meta">
+        <strong>${escapeHtml(evaluation.athlete || "Athlete")}</strong>
+        <span>${new Date(evaluation.created_at).toLocaleString()} · ${evaluation.frameCount || 0} frame${evaluation.frameCount === 1 ? "" : "s"}</span>
+      </div>
+      <div class="ai-result evaluation-dialog-result">
+        ${renderAiResultMarkup(evaluation.result || {}, { demo: evaluation.demo })}
+      </div>
+    `;
+  }
+  $("#evaluationDialog")?.showModal();
+}
+
+function deleteEditingEvaluation() {
+  state.evaluations = state.evaluations.filter((item) => item.id !== state.editingEvaluationId);
+  state.editingEvaluationId = null;
+  persistEvaluations();
+  renderEvaluationList();
+  $("#evaluationDialog")?.close();
+}
+
+function renderAiResultMarkup(result, options = {}) {
+  return `
     <article class="ai-card ${options.demo ? "demo" : ""}">
       <span>${escapeHtml(result.sport || "Movement analysis")}</span>
       <strong>${escapeHtml(result.issue || "No issue identified")}</strong>
+      ${renderAiList("What Looks Correct", result.strengths)}
+      ${renderAiList("What Needs Work", result.weaknesses)}
       ${renderAiList("Evidence", result.evidence)}
       ${renderAiList("Corrections", result.corrections)}
       ${renderAiList("Drills", result.drills)}
@@ -609,9 +725,29 @@ function demoAnalysisResult() {
     sport: "Sampled movement",
     issue: "AI analysis is ready, but the backend is not connected.",
     confidence: "demo",
+    strengths: ["Saved frames can be reviewed as a swing sequence once the AI key is connected."],
+    weaknesses: ["Live AI feedback is unavailable until OPENAI_API_KEY is set on the server."],
     evidence: ["Frames were collected from the current video or image.", "Set OPENAI_API_KEY on the server to receive sport-specific feedback."],
     corrections: ["Review setup, midpoint, contact or impact, and follow-through in the frame strip.", "Use drawing tools to mark the most important body or equipment positions."],
     drills: ["Slow-motion reps from the strongest frame position.", "Pause-and-hold checkpoints through the motion."],
+    disclaimer: "AI feedback is coaching guidance only and is not a medical diagnosis."
+  };
+}
+
+function analysisErrorResult(message) {
+  const text = String(message || "AI analysis failed");
+  const quotaProblem = /quota|billing|insufficient|credits|limit/i.test(text);
+  return {
+    sport: "AI Coach",
+    issue: quotaProblem ? "OpenAI quota or billing needs attention." : "AI analysis could not complete.",
+    confidence: "error",
+    strengths: ["Saved frames were collected and sent through the analysis flow."],
+    weaknesses: [quotaProblem ? "The OpenAI account or project does not currently have available API usage." : "The AI service returned an error before analysis completed."],
+    evidence: [text],
+    corrections: quotaProblem
+      ? ["Add API credits or enable billing in the OpenAI Platform project.", "Check project usage limits, then try Analyze again."]
+      : ["Check the API key, model, and server logs, then try Analyze again."],
+    drills: [],
     disclaimer: "AI feedback is coaching guidance only and is not a medical diagnosis."
   };
 }
@@ -625,21 +761,20 @@ async function runAiAnalysis() {
       ? getStillImageSample()
       : getFrameStripSamples(12);
   const resultEl = $("#aiResult");
-  const confidenceEl = $("#aiConfidence");
 
   if (!frames.length) {
-    confidenceEl.textContent = "No frames";
     resultEl.innerHTML = "<p>Add saved frames to the AI Coach panel before running analysis.</p>";
     return;
   }
 
   state.analyzing = true;
   $("#aiAnalyzeBtn").disabled = true;
-  confidenceEl.textContent = "Working";
   resultEl.innerHTML = `<p>Analyzing ${frames.length} sampled frame${frames.length === 1 ? "" : "s"}...</p>`;
 
   try {
     const token = await getAccessToken();
+    const preparedFrames = await prepareFramesForAi(frames);
+    if (!preparedFrames.length) throw new Error("Saved frames could not be prepared for AI analysis.");
     const response = await fetch("/api/analyze-motion", {
       method: "POST",
       headers: {
@@ -649,22 +784,20 @@ async function runAiAnalysis() {
       body: JSON.stringify({
         athlete: $("#athleteInput")?.value || "Athlete",
         notes: [
-          $("#notesInput")?.value || "",
+          getProjectNotesText(),
           aiCoachFrames.length
-            ? `Analyze all ${aiCoachFrames.length} saved AI Coach frame${aiCoachFrames.length === 1 ? "" : "s"} as one sequence. Focus on whether the athlete is hitting or pitching. Give practical baseball/softball coaching feedback for becoming a better hitter or correcting pitching mechanics.`
+            ? `Analyze ${preparedFrames.length} saved AI Coach frame${preparedFrames.length === 1 ? "" : "s"} as one sequence. Focus on what the hitter is doing correctly, what is wrong with the swing, and how to correct it. If pitching is shown instead, give pitching mechanics feedback.`
             : "Analyze the sampled video frames for baseball or softball hitting/pitching mechanics when visible."
         ].filter(Boolean).join("\n"),
-        frames
+        frames: preparedFrames
       })
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "AI analysis failed");
+    saveEvaluation(data.result, preparedFrames.length, { demo: data.demo });
     renderAiResult(data.result, { demo: data.demo });
   } catch (error) {
-    renderAiResult({
-      ...demoAnalysisResult(),
-      evidence: [error.message, "The frame collection path is working; connect the API route to enable live OpenAI analysis."]
-    }, { demo: true });
+    renderAiResult(analysisErrorResult(error.message), { demo: true });
   } finally {
     state.analyzing = false;
     $("#aiAnalyzeBtn").disabled = false;
@@ -705,13 +838,33 @@ function drawContainedMedia(ctx, source, sourceWidth, sourceHeight, width, heigh
   ctx.drawImage(source, x, y, drawWidth, drawHeight);
 }
 
-function addImportedMediaItem(media) {
+function getProjectMedia() {
+  return state.libraryMedia.filter((media) => media.projectId === state.selectedProjectId);
+}
+
+function renderLibraryMedia() {
+  const library = $(".library-list");
+  if (!library) return;
+  library.innerHTML = "";
+  const projectMedia = getProjectMedia();
+  if (!projectMedia.length) {
+    const empty = document.createElement("div");
+    empty.className = "library-empty";
+    empty.id = "libraryEmpty";
+    empty.innerHTML = "<strong>No media yet</strong><span>Upload a video or image to add it to this project.</span>";
+    library.append(empty);
+    return;
+  }
+  projectMedia.forEach((media, index) => addImportedMediaItem(media, index === 0));
+}
+
+function addImportedMediaItem(media, isActive = false) {
   const library = $(".library-list");
   if (!library) return;
   $("#libraryEmpty")?.remove();
-  document.querySelectorAll(".media-item").forEach((item) => item.classList.remove("active"));
+  if (isActive) document.querySelectorAll(".media-item").forEach((item) => item.classList.remove("active"));
   const item = document.createElement("button");
-  item.className = "media-item active";
+  item.className = `media-item${isActive ? " active" : ""}`;
   item.type = "button";
   item.draggable = true;
   item.dataset.mediaId = media.id;
@@ -733,7 +886,7 @@ function addImportedMediaItem(media) {
     event.dataTransfer.setData("text/plain", media.id);
     event.dataTransfer.effectAllowed = "copy";
   });
-  library.prepend(item);
+  library.append(item);
 }
 
 function updateTimelineTracks(file, kind, duration = 0) {
@@ -980,9 +1133,10 @@ function getFrameMetadata(source) {
   return {
     id: crypto.randomUUID(),
     user_id: state.user?.id || "demo-user",
+    project_id: state.selectedProjectId,
     athlete: $("#athleteInput")?.value || "Athlete",
     session_date: $("#sessionInput")?.value || "",
-    note: $("#notesInput")?.value || "",
+    note: getProjectNotesText(),
     created_at: new Date().toISOString(),
     source
   };
@@ -1030,7 +1184,7 @@ function makeSnapshotCanvas(target, includeAnnotations = true) {
 }
 
 function persistSavedFrames() {
-  const key = "diamondframe.frames";
+  const key = getProjectStorageKey("frames");
   while (state.savedFrames.length) {
     try {
       localStorage.setItem(key, JSON.stringify(state.savedFrames));
@@ -1045,6 +1199,110 @@ function persistSavedFrames() {
     return false;
   }
   return false;
+}
+
+function getProjectStorageKey(name, projectId = state.selectedProjectId) {
+  return projectId ? `diamondframe.project.${projectId}.${name}` : `diamondframe.${name}`;
+}
+
+function readProjectJson(name, fallback = []) {
+  try {
+    return JSON.parse(localStorage.getItem(getProjectStorageKey(name)) || JSON.stringify(fallback));
+  } catch {
+    return fallback;
+  }
+}
+
+function frameBelongsToSelectedProject(frame) {
+  const selectedProject = getSelectedProject();
+  if (!selectedProject) return false;
+  if (frame.project_id) return frame.project_id === state.selectedProjectId;
+  return (frame.athlete || "").trim().toLowerCase() === selectedProject.athlete.trim().toLowerCase();
+}
+
+function persistProjectNotes() {
+  localStorage.setItem(getProjectStorageKey("notes"), JSON.stringify(state.projectNotes));
+}
+
+function readProjectNotes() {
+  const raw = localStorage.getItem(getProjectStorageKey("notes"));
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {
+    // Older projects stored notes as a single text value.
+  }
+  return raw.trim()
+    ? [{ id: crypto.randomUUID(), text: raw, created_at: new Date().toISOString() }]
+    : [];
+}
+
+function getProjectNotesText() {
+  const savedNotes = state.projectNotes.map((note) => note.text).filter(Boolean);
+  const draftNote = $("#notesInput")?.value.trim();
+  return [...savedNotes, draftNote].filter(Boolean).join("\n\n");
+}
+
+function renderProjectNotes() {
+  const list = $("#mechanicsNoteList");
+  if (!list) return;
+  list.innerHTML = state.projectNotes.map((note) => `
+    <article class="mechanics-note" data-note-id="${note.id}">
+      <p>${escapeHtml(note.text)}</p>
+      <button type="button" data-edit-note="${note.id}">Edit</button>
+    </article>
+  `).join("");
+}
+
+function saveProjectNote() {
+  const input = $("#notesInput");
+  const text = input?.value.trim();
+  if (!text) return;
+  state.projectNotes.unshift({
+    id: crypto.randomUUID(),
+    text,
+    created_at: new Date().toISOString()
+  });
+  input.value = "";
+  persistProjectNotes();
+  renderProjectNotes();
+}
+
+function openMechanicsNoteEditor(noteId) {
+  const note = state.projectNotes.find((item) => item.id === noteId);
+  if (!note) return;
+  state.editingNoteId = note.id;
+  $("#mechanicsNoteEditInput").value = note.text;
+  $("#mechanicsNoteDialog")?.showModal();
+  $("#mechanicsNoteEditInput")?.focus();
+}
+
+function saveEditingMechanicsNote() {
+  const note = state.projectNotes.find((item) => item.id === state.editingNoteId);
+  if (!note) return;
+  note.text = $("#mechanicsNoteEditInput")?.value.trim() || "";
+  note.updated_at = new Date().toISOString();
+  if (!note.text) state.projectNotes = state.projectNotes.filter((item) => item.id !== note.id);
+  persistProjectNotes();
+  renderProjectNotes();
+  state.editingNoteId = null;
+  $("#mechanicsNoteDialog")?.close();
+}
+
+function deleteEditingMechanicsNote() {
+  state.projectNotes = state.projectNotes.filter((note) => note.id !== state.editingNoteId);
+  persistProjectNotes();
+  renderProjectNotes();
+  state.editingNoteId = null;
+  $("#mechanicsNoteDialog")?.close();
+}
+
+function persistCurrentProjectWorkspace() {
+  persistCurrentFrameEdit();
+  persistProjectNotes();
+  persistSavedFrames();
+  persistEvaluations();
 }
 
 function saveAnnotatedFrame() {
@@ -1076,40 +1334,63 @@ function saveAnnotatedFrame() {
   return frame;
 }
 
+function getEditingFrame() {
+  return state.savedFrames.find((frame) => frame.id === state.editingFrameId) || null;
+}
+
+function persistCurrentFrameEdit() {
+  const frame = getEditingFrame();
+  if (!frame || !state.frameStillImage) return;
+
+  const annotatedCanvas = makeSnapshotCanvas("frame", true);
+  if (!annotatedCanvas) return;
+
+  frame.annotations = structuredClone(state.frameAnnotations);
+  frame.note = $("#savedFrameNoteInput") ? $("#savedFrameNoteInput").value : frame.note || "";
+  frame.image = annotatedCanvas.toDataURL("image/jpeg", 0.82);
+  frame.updated_at = new Date().toISOString();
+  persistSavedFrames();
+  renderSavedFrames();
+}
+
+function deleteEditingFrame() {
+  const frame = getEditingFrame();
+  if (!frame) return;
+  state.savedFrames = state.savedFrames.filter((item) => item.id !== frame.id);
+  state.aiCoachFrames = state.aiCoachFrames.filter((item) => item.id !== frame.id);
+  state.editingFrameId = null;
+  persistSavedFrames();
+  renderSavedFrames();
+  $("#savedFrameEditDialog")?.close();
+  state.frameStillImage = null;
+  state.frameAnnotations = [];
+  $("#emptyFrame").hidden = false;
+  $("#framePane").classList.remove("loaded");
+  frameCaptureCtx.clearRect(0, 0, frameCaptureCanvas.width, frameCaptureCanvas.height);
+  frameAnnotationCtx.clearRect(0, 0, frameAnnotationCanvas.width, frameAnnotationCanvas.height);
+}
+
 function saveComparisonFrame() {
   saveAnnotatedFrame();
 }
 
-function renderAiSavedFrame(frame) {
-  const target = $("#aiResult");
-  if (!target || !frame) return;
-  if (!state.aiCoachFrames.some((item) => item.id === frame.id)) {
-    state.aiCoachFrames.unshift(frame);
-  }
-  let list = target.querySelector(".ai-saved-frame-list");
-  if (!list) {
-    target.innerHTML = "";
-    list = document.createElement("div");
-    list.className = "ai-saved-frame-list";
-    target.append(list);
+function renderAiCoachFrames() {
+  const list = $("#aiSavedFrameList");
+  if (!list) return;
+  if (!state.savedFrames.length) {
+    list.innerHTML = `<p class="empty-ai-frames">No saved frames yet</p>`;
+    return;
   }
 
-  const card = document.createElement("article");
-  card.className = "ai-saved-frame";
-
-  const image = document.createElement("img");
-  image.src = frame.image;
-  image.alt = "Saved frame preview";
-
-  const copy = document.createElement("div");
-  const source = document.createElement("span");
-  source.textContent = frame.source || "Saved Frame";
-  const meta = document.createElement("p");
-  meta.textContent = `${frame.session_date || "No date"} · ${new Date(frame.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-
-  copy.append(source, meta);
-  card.append(image, copy);
-  list.prepend(card);
+  list.innerHTML = state.savedFrames.map((frame, index) => `
+    <article class="ai-saved-frame" data-ai-frame-id="${frame.id}">
+      <img src="${frame.image}" alt="AI Coach saved frame ${index + 1}" />
+      <div>
+        <span>${escapeHtml(frame.source || "Saved Frame")} ${index + 1}</span>
+        <p>${escapeHtml(frame.note || frame.session_date || "Ready for swing analysis")}</p>
+      </div>
+    </article>
+  `).join("");
 }
 
 function getActiveAnnotationTarget() {
@@ -1118,7 +1399,8 @@ function getActiveAnnotationTarget() {
 }
 
 function renderSavedFrames() {
-  $("#frameCount").textContent = state.savedFrames.length;
+  const frameCount = $("#frameCount");
+  if (frameCount) frameCount.textContent = state.savedFrames.length;
   const libraryFrameCount = $("#libraryFrameCount");
   if (libraryFrameCount) libraryFrameCount.textContent = state.savedFrames.length;
   $("#savedFrames").innerHTML = state.savedFrames.map((frame) => `
@@ -1127,14 +1409,20 @@ function renderSavedFrames() {
       <div>
         <strong>${escapeHtml(frame.athlete || "Athlete")}</strong>
         <span>${escapeHtml(frame.source || "Original")} · ${escapeHtml(frame.session_date || "No date")} · ${new Date(frame.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+        ${frame.note ? `<span>${escapeHtml(frame.note)}</span>` : ""}
       </div>
-      <button class="saved-frame-delete" type="button" data-delete-frame="${frame.id}" aria-label="Delete saved frame">Delete</button>
+      <button class="saved-frame-edit" type="button" data-edit-frame="${frame.id}" aria-label="Open saved frame notes">Notes</button>
     </article>
   `).join("");
+  renderAiCoachFrames();
 }
 
 function loadSavedFrame(frame) {
   if (!frame?.image) return;
+  persistCurrentFrameEdit();
+  state.editingFrameId = frame.id;
+  const noteInput = $("#savedFrameNoteInput");
+  if (noteInput) noteInput.value = frame.note || "";
   const image = new Image();
   image.addEventListener("load", () => {
     state.frameStillImage = image;
@@ -1152,7 +1440,13 @@ function loadSavedFrame(frame) {
   image.src = frame.baseImage || frame.image;
 }
 
+function openSavedFrameEditor(frame) {
+  loadSavedFrame(frame);
+  $("#savedFrameEditDialog")?.showModal();
+}
+
 function setVideoView(view) {
+  if (state.videoView === "frame" && view !== "frame") persistCurrentFrameEdit();
   state.videoView = view;
   state.comparing = view === "split";
   const isFrameView = view === "frame";
@@ -1206,23 +1500,344 @@ function updateAccess() {
   if (accessLabel) accessLabel.textContent = isPro ? "Compare, reports, exports, and unlimited uploads enabled" : "Upgrade for compare, reports, and exports";
   const authBtn = $("#authBtn");
   if (authBtn) authBtn.textContent = state.user ? state.user.email : "Log in";
+  const authPage = $("#authPage");
+  const app = $("#app");
+  if (authPage && app) {
+    authPage.hidden = Boolean(state.user);
+    app.hidden = !state.user;
+    if (state.user) requestAnimationFrame(resizeCanvases);
+  }
 }
 
-async function startCheckout() {
+function setAuthPageMode(mode) {
+  const title = $("#authPageTitle");
+  const subtitle = $("#authPageSubtitle");
+  const submitButton = $("#authSubmitBtn");
+  const passwordField = $("#authPasswordField");
+  const passwordInput = $("#authPasswordInput");
+  const message = $("#authPageMessage");
+  const forgotButton = $("#forgotPasswordBtn");
+  const backButton = $("#backToLoginBtn");
+
+  document.querySelectorAll("[data-auth-mode]").forEach((button) => {
+    button.classList.toggle("selected", button.dataset.authMode === mode);
+  });
+
+  if (message) message.textContent = "";
+  if (passwordField) passwordField.hidden = mode === "reset";
+  if (passwordInput) {
+    passwordInput.required = mode !== "reset";
+    passwordInput.autocomplete = mode === "signup" ? "new-password" : "current-password";
+  }
+  if (forgotButton) forgotButton.hidden = mode === "reset";
+  if (backButton) backButton.hidden = mode !== "reset";
+
+  if (mode === "login") {
+    if (title) title.textContent = "Log in to your account";
+    if (subtitle) subtitle.textContent = "Return to your private workspace for saved frames, projects, and coach notes.";
+    if (submitButton) submitButton.textContent = "Log In";
+    return;
+  }
+
+  if (mode === "reset") {
+    if (title) title.textContent = "Reset your password";
+    if (subtitle) subtitle.textContent = "Enter your email and we will send password reset instructions.";
+    if (submitButton) submitButton.textContent = "Send Reset Link";
+    return;
+  }
+
+  if (title) title.textContent = "Create your account";
+  if (subtitle) subtitle.textContent = "Start a private workspace for your videos, saved frames, and AI coach notes.";
+  if (submitButton) submitButton.textContent = "Create Account";
+}
+
+function getAuthPageMode() {
+  if ($("#authPasswordField")?.hidden) return "reset";
+  return document.querySelector("[data-auth-mode].selected")?.dataset.authMode || "signup";
+}
+
+function completeAuth(email) {
+  state.user = {
+    id: state.user?.id || crypto.randomUUID(),
+    email
+  };
+  localStorage.setItem("diamondframe.user", JSON.stringify(state.user));
+  updateAccess();
+  setDashboardSection("projects");
+  setView("dashboard");
+}
+
+async function submitAuthPage(event) {
+  event.preventDefault();
+  const email = $("#authEmailInput")?.value.trim();
+  const password = $("#authPasswordInput")?.value || "";
+  const mode = getAuthPageMode();
+  const message = $("#authPageMessage");
+
+  if (!email) return;
+  if (message) message.textContent = "";
+
+  if (mode === "reset") {
+    if (supabase) {
+      const { error } = await supabase.auth.resetPasswordForEmail(email);
+      if (error) {
+        if (message) message.textContent = error.message;
+        return;
+      }
+    }
+    if (message) message.textContent = "Password reset instructions sent if that email is registered.";
+    return;
+  }
+
+  if (supabase) {
+    const result = mode === "signup"
+      ? await supabase.auth.signUp({ email, password })
+      : await supabase.auth.signInWithPassword({ email, password });
+    if (result.error) {
+      if (message) message.textContent = result.error.message;
+      return;
+    }
+    const user = result.data.user || result.data.session?.user;
+    if (user) completeAuth(user.email || email);
+    return;
+  }
+
+  completeAuth(email);
+}
+
+function persistProjects() {
+  localStorage.setItem("diamondframe.projects", JSON.stringify(state.projects));
+  if (state.selectedProjectId) localStorage.setItem("diamondframe.selectedProjectId", state.selectedProjectId);
+  else localStorage.removeItem("diamondframe.selectedProjectId");
+}
+
+function getSelectedProject() {
+  return state.projects.find((project) => project.id === state.selectedProjectId) || null;
+}
+
+function updateProjectChrome() {
+  const selectedProject = getSelectedProject();
+  const title = selectedProject?.athlete || "New Project";
+  $(".topbar h1").textContent = title;
+  const athleteInput = $("#athleteInput");
+  if (athleteInput) athleteInput.value = selectedProject?.athlete || "";
+}
+
+function selectProject(projectId, { openEditor = false } = {}) {
+  if (projectId === state.selectedProjectId) {
+    if (openEditor) setView("editor");
+    return;
+  }
+
+  persistCurrentProjectWorkspace();
+  state.selectedProjectId = projectId;
+  persistProjects();
+  loadProjectWorkspace();
+  renderDashboardProjects();
+  if (openEditor) setView("editor");
+}
+
+function resetEditorSurface() {
+  [videoA, videoB].forEach((video) => {
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    video.style.visibility = "visible";
+    video.closest(".video-pane")?.classList.remove("loaded");
+  });
+
+  $("#emptyA").hidden = false;
+  $("#emptyB").hidden = false;
+  $("#emptyFrame").hidden = false;
+  $("#framePane").classList.remove("loaded");
+  state.stillImage = null;
+  state.compareStillImage = null;
+  state.frameStillImage = null;
+  state.currentMediaKind = null;
+  state.captured = false;
+  state.annotations = [];
+  state.compareAnnotations = [];
+  state.frameAnnotations = [];
+  state.aiCoachFrames = [];
+  state.editingFrameId = null;
+  state.timelineSegments = [];
+  state.selectedSegmentId = null;
+  state.audioMuted = false;
+  state.drawingTarget = "original";
+  clearFrameStrip();
+  clearCompareFrameStrip();
+  $("#timelineA").value = 0;
+  $("#timelineB").value = 0;
+  $("#timeA").textContent = formatTime(0);
+  $("#timeB").textContent = formatTime(0);
+  $("#aiResult").innerHTML = "<p>Save swing frames, then select Analyze to get AI coaching feedback on what looks correct, what needs work, and how to fix it.</p>";
+  renderEvaluationList();
+  renderTimelineTracks();
+  setVideoView("primary");
+  requestAnimationFrame(() => {
+    [captureCtx, annotationCtx, compareCaptureCtx, compareAnnotationCtx, frameCaptureCtx, frameAnnotationCtx].forEach((ctx) => {
+      const canvas = ctx.canvas;
+      const rect = canvas.getBoundingClientRect();
+      ctx.clearRect(0, 0, rect.width, rect.height);
+    });
+  });
+}
+
+function loadProjectWorkspace({ resetSurface = true } = {}) {
+  if (resetSurface) resetEditorSurface();
+  const storedFrames = readProjectJson("frames", []);
+  state.savedFrames = storedFrames.filter(frameBelongsToSelectedProject);
+  if (state.savedFrames.length !== storedFrames.length) persistSavedFrames();
+  state.projectNotes = readProjectNotes();
+  state.evaluations = readProjectJson("evaluations", []).filter((evaluation) => !evaluation.project_id || evaluation.project_id === state.selectedProjectId);
+  const notesInput = $("#notesInput");
+  if (notesInput) notesInput.value = "";
+  renderLibraryMedia();
+  renderSavedFrames();
+  renderProjectNotes();
+  renderEvaluationList();
+  updateProjectChrome();
+}
+
+function renderDashboardProjects() {
+  const projectList = $("#dashboardProjects");
+  const projectCount = $("#dashboardProjectCount");
+  if (projectCount) projectCount.textContent = String(state.projects.length);
+  if (!projectList) return;
+
+  projectList.innerHTML = "";
+  if (!state.projects.length) {
+    const empty = document.createElement("p");
+    empty.className = "dashboard-empty";
+    empty.textContent = "No projects yet. Create one to start a workspace.";
+    projectList.append(empty);
+    return;
+  }
+
+  state.projects.forEach((project) => {
+    const row = document.createElement("article");
+    row.className = `dashboard-project project-row${project.id === state.selectedProjectId ? " selected" : ""}`;
+    row.dataset.projectId = project.id;
+
+    const thumb = document.createElement("div");
+    thumb.className = "project-thumb";
+
+    const copy = document.createElement("div");
+    const name = document.createElement("strong");
+    const details = document.createElement("span");
+    const meta = document.createElement("small");
+
+    name.textContent = project.athlete;
+    details.textContent = [project.sport, project.team].filter(Boolean).join(" · ") || "No sport added";
+    meta.textContent = project.age ? `Age ${project.age}` : "Ready to edit";
+
+    const actions = document.createElement("div");
+    actions.className = "project-actions";
+    const openButton = document.createElement("button");
+    openButton.type = "button";
+    openButton.textContent = "Open";
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "danger-button";
+    deleteButton.textContent = "Delete";
+
+    copy.append(name, details, meta);
+    actions.append(openButton, deleteButton);
+    row.append(thumb, copy, actions);
+    openButton.addEventListener("click", () => {
+      selectProject(project.id, { openEditor: true });
+    });
+    deleteButton.addEventListener("click", () => removeProject(project.id));
+
+    projectList.append(row);
+  });
+}
+
+function removeProject(projectId) {
+  if (state.selectedProjectId === projectId) persistCurrentProjectWorkspace();
+  state.projects = state.projects.filter((project) => project.id !== projectId);
+  if (state.selectedProjectId === projectId) {
+    state.selectedProjectId = state.projects[0]?.id || null;
+    persistProjects();
+    loadProjectWorkspace();
+  } else {
+    persistProjects();
+  }
+  renderDashboardProjects();
+}
+
+function openNewProjectDialog() {
+  const form = $("#newProjectForm");
+  if (form) form.reset();
+  $("#projectDialogTitle").textContent = "New Project";
+  $("#projectDialogCopy").textContent = "Add the athlete details for this project. Only the athlete name is required.";
+  $("#projectDeleteBtn").hidden = true;
+  $("#newProjectDialog")?.showModal();
+  $("#projectAthleteInput")?.focus();
+}
+
+function submitNewProject(event) {
+  event.preventDefault();
+  const formData = new FormData(event.currentTarget);
+  const athlete = String(formData.get("athlete") || "").trim();
+  if (!athlete) return;
+
+  const project = {
+    id: crypto.randomUUID(),
+    athlete,
+    sport: String(formData.get("sport") || "").trim(),
+    age: String(formData.get("age") || "").trim(),
+    team: String(formData.get("team") || "").trim(),
+    createdAt: new Date().toISOString()
+  };
+
+  state.projects.unshift(project);
+  persistCurrentProjectWorkspace();
+  persistProjects();
+  state.selectedProjectId = project.id;
+  persistProjects();
+  loadProjectWorkspace();
+  renderDashboardProjects();
+  $("#newProjectDialog")?.close();
+  setView("editor");
+}
+
+function setDashboardSection(section) {
+  const targetSection = section || "projects";
+  document.querySelectorAll("[data-dashboard-target]").forEach((button) => {
+    button.classList.toggle("selected", button.dataset.dashboardTarget === targetSection);
+    button.setAttribute("aria-pressed", String(button.dataset.dashboardTarget === targetSection));
+  });
+  document.querySelectorAll("[data-dashboard-section]").forEach((panel) => {
+    panel.hidden = panel.dataset.dashboardSection !== targetSection;
+  });
+}
+
+async function signOutDashboard() {
+  persistCurrentProjectWorkspace();
+  if (supabase) await supabase.auth.signOut();
+  state.user = null;
+  localStorage.removeItem("diamondframe.user");
+  setAuthPageMode("login");
+  updateAccess();
+}
+
+async function startCheckout(plan = "monthly") {
   try {
     const token = await getAccessToken();
     const response = await fetch("/api/create-checkout-session", {
       method: "POST",
-      headers: token ? { Authorization: `Bearer ${token}` } : {}
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify({ plan })
     });
     const data = await response.json();
     if (data.url) window.location.href = data.url;
     else throw new Error("Checkout is not configured");
-  } catch {
-    state.subscription = "pro";
-    localStorage.setItem("diamondframe.subscription", "pro");
-    updateAccess();
-    alert("Demo mode: Pro access enabled. Connect Stripe env vars to use real Checkout.");
+  } catch (error) {
+    alert(error.message || "Stripe Checkout is not configured yet.");
   }
 }
 
@@ -1242,31 +1857,59 @@ async function openPortal() {
 }
 
 function exportReport() {
-  if (state.subscription !== "pro") {
-    setView("dashboard");
+  if (!state.savedFrames.length) {
+    alert("Save at least one frame before exporting.");
     return;
   }
-  const lines = [
-    `DiamondFrame Report`,
-    `Athlete: ${$("#athleteInput").value}`,
-    `Session: ${$("#sessionInput").value}`,
-    "",
-    "Coach Notes:",
-    $("#notesInput").value || "No notes added.",
-    "",
-    `Saved frames: ${state.savedFrames.length}`
-  ];
-  const blob = new Blob([lines.join("\n")], { type: "text/plain" });
+
+  persistCurrentProjectWorkspace();
+  const project = getSelectedProject();
+  const athlete = project?.athlete || $("#athleteInput").value || "athlete";
+  const dateLabel = new Date().toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+  const frameCards = state.savedFrames.map((frame, index) => `
+    <article class="frame-card">
+      <h2>Frame ${index + 1}: ${escapeHtml(frame.source || "Saved Frame")}</h2>
+      <img src="${frame.image}" alt="Saved frame ${index + 1}" />
+      <p><strong>Date:</strong> ${escapeHtml(frame.session_date || new Date(frame.created_at).toLocaleDateString())}</p>
+      <p><strong>Notes:</strong> ${escapeHtml(frame.note || "No notes added.")}</p>
+    </article>
+  `).join("");
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(athlete)} Saved Frames</title>
+  <style>
+    body { margin: 0; padding: 32px; color: #17181d; font-family: Arial, sans-serif; background: #f5f6f8; }
+    header, .frame-card { max-width: 960px; margin: 0 auto 24px; }
+    h1 { margin: 0 0 6px; font-size: 28px; }
+    header p { margin: 0; color: #5b6170; }
+    .frame-card { padding: 20px; background: #fff; border: 1px solid #d9dce3; border-radius: 8px; page-break-inside: avoid; }
+    .frame-card h2 { margin: 0 0 14px; font-size: 18px; }
+    .frame-card img { display: block; width: 100%; height: auto; margin-bottom: 14px; border-radius: 6px; border: 1px solid #d9dce3; }
+    .frame-card p { margin: 8px 0 0; line-height: 1.5; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>${escapeHtml(athlete)} Saved Frames</h1>
+    <p>Exported ${escapeHtml(dateLabel)} from DiamondFrame</p>
+  </header>
+  ${frameCards}
+</body>
+</html>`;
+  const blob = new Blob([html], { type: "text/html" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `${$("#athleteInput").value || "athlete"}-session-report.txt`;
+  link.download = `${athlete.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "saved-frames"}-saved-frames.html`;
   link.click();
   URL.revokeObjectURL(url);
 }
 
 function setView(view) {
   const isDashboard = view === "dashboard";
+  if (isDashboard) persistCurrentFrameEdit();
   $("#app").classList.toggle("dashboard-mode", isDashboard);
   $("#dashboardView").hidden = !isDashboard;
   $("#editorNavBtn").classList.toggle("active-view", !isDashboard);
@@ -1321,6 +1964,12 @@ document.querySelectorAll("[data-inspector-tab]").forEach((button) => {
 });
 
 $("#aiAnalyzeBtn").addEventListener("click", runAiAnalysis);
+document.querySelectorAll("[data-auth-mode]").forEach((button) => {
+  button.addEventListener("click", () => setAuthPageMode(button.dataset.authMode));
+});
+$("#forgotPasswordBtn")?.addEventListener("click", () => setAuthPageMode("reset"));
+$("#backToLoginBtn")?.addEventListener("click", () => setAuthPageMode("login"));
+$("#authPageForm")?.addEventListener("submit", submitAuthPage);
 
 function setupAnnotationCanvas(canvas, target) {
   canvas.addEventListener("pointerdown", (event) => {
@@ -1357,6 +2006,7 @@ function setupAnnotationCanvas(canvas, target) {
       annotations.push({ type: state.tool, start: state.start, end: point, color: state.color, width: state.width });
     }
     redraw(target);
+    if (target === "frame") persistCurrentFrameEdit();
   });
 
   canvas.addEventListener("pointercancel", () => {
@@ -1388,27 +2038,33 @@ document.querySelectorAll("[data-video-view]").forEach((button) => {
 setupPaneDropTarget($(".primary-pane"), "original");
 setupPaneDropTarget($("#comparePane"), "comparison");
 $("#annotateBtn").addEventListener("click", captureFrame);
-$("#saveFrameBtn").addEventListener("click", saveAnnotatedFrame);
+$("#saveFrameBtn")?.addEventListener("click", saveAnnotatedFrame);
 $("#panelSaveFrameBtn").addEventListener("click", saveAnnotatedFrame);
 document.querySelectorAll("[data-edit-tool]").forEach((button) => {
   button.addEventListener("click", () => setEditTool(button.dataset.editTool));
 });
 $("#muteAudioBtn").addEventListener("click", toggleSelectedAudioMute);
 $("#inspectorSaveFrameBtn").addEventListener("click", () => {
-  renderAiSavedFrame(saveAnnotatedFrame());
+  saveAnnotatedFrame();
+  renderAiCoachFrames();
+});
+$("#evaluationTabBtn").addEventListener("click", () => {
+  if (state.evaluations[0]) openEvaluation(state.evaluations[0].id);
+  else $("#aiResult").innerHTML = "<p>No evaluations yet. Save frames, then select Analyze.</p>";
+});
+$("#evaluationList").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-open-evaluation]");
+  if (!button) return;
+  openEvaluation(button.dataset.openEvaluation);
 });
 $("#savedFrames").addEventListener("click", (event) => {
-  const deleteButton = event.target.closest("[data-delete-frame]");
-  if (deleteButton) {
-    state.savedFrames = state.savedFrames.filter((frame) => frame.id !== deleteButton.dataset.deleteFrame);
-    persistSavedFrames();
-    renderSavedFrames();
-    return;
-  }
-
+  const notesButton = event.target.closest("[data-edit-frame]");
   const card = event.target.closest("[data-frame-id]");
   if (!card) return;
-  loadSavedFrame(state.savedFrames.find((frame) => frame.id === card.dataset.frameId));
+  const frame = state.savedFrames.find((item) => item.id === (notesButton?.dataset.editFrame || card.dataset.frameId));
+  if (!frame) return;
+  if (notesButton) openSavedFrameEditor(frame);
+  else loadSavedFrame(frame);
 });
 $("#exportBtn").addEventListener("click", exportReport);
 $("#playBtn").addEventListener("click", () => {
@@ -1494,7 +2150,14 @@ const authBtn = $("#authBtn");
 if (authBtn) authBtn.addEventListener("click", () => $("#authDialog").showModal());
 $("#editorNavBtn").addEventListener("click", () => setView("editor"));
 $("#dashboardNavBtn").addEventListener("click", () => setView("dashboard"));
-$("#dashboardUploadBtn").addEventListener("click", () => {
+$("#newProjectBtn")?.addEventListener("click", openNewProjectDialog);
+$("#newProjectForm")?.addEventListener("submit", submitNewProject);
+document.querySelectorAll("[data-dashboard-target]").forEach((button) => {
+  button.setAttribute("aria-pressed", String(button.classList.contains("selected")));
+  button.addEventListener("click", () => setDashboardSection(button.dataset.dashboardTarget));
+});
+$("#dashboardSideSignOutBtn")?.addEventListener("click", signOutDashboard);
+$("#dashboardUploadBtn")?.addEventListener("click", () => {
   setView("editor");
   fileA.click();
 });
@@ -1505,8 +2168,10 @@ $("#pricingBtn").addEventListener("click", () => $("#pricingDialog").showModal()
 document.querySelectorAll("[data-close]").forEach((button) => {
   button.addEventListener("click", () => $(`#${button.dataset.close}`).close());
 });
-$("#checkoutBtn").addEventListener("click", startCheckout);
-$("#pricingCheckoutBtn").addEventListener("click", startCheckout);
+$("#checkoutMonthlyBtn").addEventListener("click", () => startCheckout("monthly"));
+$("#checkoutAnnualBtn").addEventListener("click", () => startCheckout("annual"));
+$("#pricingMonthlyBtn").addEventListener("click", () => startCheckout("monthly"));
+$("#pricingAnnualBtn").addEventListener("click", () => startCheckout("annual"));
 $("#portalBtn").addEventListener("click", openPortal);
 $("#dashboardPortalBtn").addEventListener("click", openPortal);
 $("#colorInput").addEventListener("input", (event) => {
@@ -1515,8 +2180,22 @@ $("#colorInput").addEventListener("input", (event) => {
 $("#widthInput").addEventListener("input", (event) => {
   state.width = Number(event.target.value);
 });
-$("#saveNoteBtn").addEventListener("click", () => localStorage.setItem("diamondframe.notes", $("#notesInput").value));
-$("#notesInput").value = localStorage.getItem("diamondframe.notes") || "";
+$("#saveNoteBtn").addEventListener("click", saveProjectNote);
+$("#mechanicsNoteList")?.addEventListener("click", (event) => {
+  const editButton = event.target.closest("[data-edit-note]");
+  if (!editButton) return;
+  openMechanicsNoteEditor(editButton.dataset.editNote);
+});
+$("#mechanicsNoteSaveBtn")?.addEventListener("click", saveEditingMechanicsNote);
+$("#mechanicsNoteDeleteBtn")?.addEventListener("click", deleteEditingMechanicsNote);
+$("#savedFrameSaveBtn")?.addEventListener("click", () => persistCurrentFrameEdit());
+$("#savedFrameDeleteBtn")?.addEventListener("click", deleteEditingFrame);
+$("#evaluationDeleteBtn")?.addEventListener("click", deleteEditingEvaluation);
+$("#evaluationDialog")?.addEventListener("close", () => {
+  state.editingEvaluationId = null;
+});
+$("#savedFrameNoteInput")?.addEventListener("input", () => persistCurrentFrameEdit());
+$("#savedFrameEditDialog")?.addEventListener("close", () => persistCurrentFrameEdit());
 $("#authForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const email = $("#emailInput").value;
@@ -1553,7 +2232,9 @@ window.addEventListener("resize", () => {
   applySavedLayoutDimensions();
   resizeCanvases();
 });
+if (state.selectedProjectId && !getSelectedProject()) state.selectedProjectId = null;
+loadProjectWorkspace({ resetSurface: false });
 resizeCanvases();
-renderSavedFrames();
+renderDashboardProjects();
 updateAccess();
 loadSupabaseSession();

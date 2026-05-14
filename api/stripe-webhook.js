@@ -5,17 +5,28 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: "2026-02-25.clover"
 });
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
-  { auth: { persistSession: false } }
-);
+let supabaseAdmin;
+
+function getSupabaseAdmin() {
+  if (!process.env.SUPABASE_URL) throw new Error("Missing SUPABASE_URL");
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
+  if (!supabaseAdmin) {
+    supabaseAdmin = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY,
+      { auth: { persistSession: false } }
+    );
+  }
+  return supabaseAdmin;
+}
 
 export default async function handler(request, response) {
   const signature = request.headers["stripe-signature"];
+  const supabase = getSupabaseAdmin();
   let event;
 
   try {
+    if (!process.env.STRIPE_WEBHOOK_SECRET) throw new Error("Missing STRIPE_WEBHOOK_SECRET");
     event = stripe.webhooks.constructEvent(request.rawBody, signature, process.env.STRIPE_WEBHOOK_SECRET);
   } catch (error) {
     response.status(400).send(`Webhook Error: ${error.message}`);

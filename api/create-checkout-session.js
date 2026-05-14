@@ -13,19 +13,30 @@ export default async function handler(request, response) {
 
   try {
     const user = await getUserContext(request);
+    const { plan = "monthly" } = request.body || {};
+    const priceId = plan === "annual"
+      ? process.env.STRIPE_PRO_ANNUAL_PRICE_ID
+      : process.env.STRIPE_PRO_MONTHLY_PRICE_ID;
+
+    if (!priceId) {
+      response.status(500).json({ error: "Stripe price is not configured" });
+      return;
+    }
+
     const origin = request.headers.origin || process.env.APP_URL;
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer: user.stripe_customer_id || undefined,
       customer_email: user.stripe_customer_id ? undefined : user.email,
       client_reference_id: user.id,
-      line_items: [{ price: process.env.STRIPE_PRO_PRICE_ID, quantity: 1 }],
+      line_items: [{ price: priceId, quantity: 1 }],
       success_url: `${origin}/?checkout=success`,
       cancel_url: `${origin}/?checkout=cancelled`,
       allow_promotion_codes: true,
       subscription_data: {
         metadata: {
-          user_id: user.id
+          user_id: user.id,
+          plan
         }
       }
     });
