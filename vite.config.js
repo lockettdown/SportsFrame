@@ -6,6 +6,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         landing: resolve(__dirname, "index.html"),
+        legacyLanding: resolve(__dirname, "landing.html"),
         app: resolve(__dirname, "app.html")
       }
     }
