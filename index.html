@@ -3,470 +3,133 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>DiamondFrame</title>
+    <title>DiamondFrame | Sport Video Analysis</title>
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
-  <body>
-    <section id="authPage" class="auth-page" aria-label="Account access">
-      <div class="auth-panel">
-        <div class="auth-copy">
-          <span class="auth-brand">DiamondFrame</span>
-          <h1>Coach workspace login</h1>
-          <p>Create an account, sign in, or reset your password to keep saved frames and athlete analysis private in Supabase.</p>
-        </div>
+  <body class="landing-document">
+    <section id="landingPage" class="landing-page">
+      <header class="landing-nav">
+        <a class="landing-brand" href="#top" aria-label="DiamondFrame home">
+          <span>DF</span>
+          <strong>DiamondFrame</strong>
+        </a>
+        <nav aria-label="Landing page sections">
+          <a href="#product">Product</a>
+          <a href="#features">Features</a>
+          <a href="#pricing">Pricing</a>
+          <a class="nav-launch" href="./app.html">Launch app</a>
+        </nav>
+      </header>
 
-        <div class="auth-card">
-          <div class="auth-tabs" role="tablist" aria-label="Account actions">
-            <button type="button" class="selected" data-auth-mode="signup">Create Account</button>
-            <button type="button" data-auth-mode="login">Log In</button>
+      <main id="top">
+        <section class="landing-hero" id="product">
+          <div class="hero-copy">
+            <h1>Let AI analyze every frame of movement</h1>
+            <p>
+              DiamondFrame gives coaches, trainers, instructors, and athletes a focused video workspace
+              for reviewing technique, marking key moments, comparing progress, and exporting clear
+              session notes.
+            </p>
+            <div class="hero-actions">
+              <a class="landing-secondary" href="#pricing">View pricing</a>
+            </div>
           </div>
 
-          <form id="authPageForm" class="auth-form">
-            <div class="auth-form-head">
-              <h2 id="authPageTitle">Create your account</h2>
-              <p id="authPageSubtitle">Start a private workspace for your videos, saved frames, and AI coach notes.</p>
-            </div>
-            <label class="field">
-              Email
-              <input id="authEmailInput" type="email" autocomplete="email" placeholder="coach@example.com" required />
-            </label>
-            <label class="field" id="authPasswordField">
-              Password
-              <input id="authPasswordInput" type="password" autocomplete="new-password" minlength="6" placeholder="Minimum 6 characters" required />
-            </label>
-            <button id="authSubmitBtn" class="primary-button accent" type="submit">Create Account</button>
-            <p class="auth-message" id="authPageMessage" role="status"></p>
-            <div class="auth-links">
-              <button type="button" id="forgotPasswordBtn">Forgot password?</button>
-              <button type="button" id="backToLoginBtn" hidden>Back to log in</button>
-            </div>
-          </form>
-        </div>
-      </div>
-    </section>
-
-    <div id="app" class="app-shell editor-shell" hidden>
-      <aside class="tool-rail" aria-label="Analysis tools">
-        <div class="brand-mark" aria-label="DiamondFrame">DF</div>
-        <button class="tool-button" data-action="compare" title="Compare videos">
-          <span aria-hidden="true">▥</span>
-          <small>Compare</small>
-        </button>
-        <div class="rail-divider"></div>
-        <button class="tool-button active" data-tool="draw" title="Draw freehand">
-          <span aria-hidden="true">✎</span>
-          <small>Draw</small>
-        </button>
-        <button class="tool-button" data-tool="line" title="Straight line">
-          <span aria-hidden="true">╱</span>
-          <small>Line</small>
-        </button>
-        <button class="tool-button" data-tool="arrow" title="Arrow">
-          <span aria-hidden="true">↗</span>
-          <small>Arrow</small>
-        </button>
-        <button class="tool-button" data-tool="circle" title="Circle">
-          <span aria-hidden="true">○</span>
-          <small>Circle</small>
-        </button>
-        <button class="tool-button" data-tool="text" title="Text note">
-          <span aria-hidden="true">T</span>
-          <small>Text</small>
-        </button>
-        <div class="rail-divider"></div>
-        <button class="tool-button" id="undoBtn" title="Undo annotation">
-          <span aria-hidden="true">↶</span>
-          <small>Undo</small>
-        </button>
-        <button class="tool-button danger" id="clearBtn" title="Delete annotations">
-          <span aria-hidden="true">⌫</span>
-          <small>Delete</small>
-        </button>
-      </aside>
-
-      <main class="workbench">
-        <header class="topbar">
-          <div>
-            <h1>New Project</h1>
-            <p>1080p HD 23.98fps</p>
-          </div>
-          <nav class="top-actions" aria-label="Primary actions">
-            <button class="ghost-button active-view" id="editorNavBtn">Editor</button>
-            <button class="ghost-button" id="dashboardNavBtn">Dashboard</button>
-          </nav>
-        </header>
-
-        <section class="editor-grid" aria-label="Video editor">
-          <aside class="media-browser" aria-label="Media library">
-            <div class="browser-top">
-              <h2>Library</h2>
-              <div class="browser-actions">
-                <button type="button" class="primary-button" id="uploadBtn">Upload</button>
-              </div>
-            </div>
-            <div class="library-list" id="libraryList">
-              <div class="library-empty" id="libraryEmpty">
-                <strong>No media yet</strong>
-                <span>Upload a video or image to add it to this project.</span>
-              </div>
-            </div>
-          </aside>
-
-          <div
-            class="section-resizer library-resizer"
-            id="libraryResizer"
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize upload library"
-            tabindex="0"
-          ></div>
-
-          <section class="stage" aria-label="Video preview and annotations">
-            <div class="preview-header">
-              <div>
-                <h2>Preview</h2>
-                <span>Frame-by-frame mechanics analysis</span>
-              </div>
-            </div>
-            <div class="stage-toolbar">
-              <label class="field mini">
-                Color
-                <input id="colorInput" type="color" value="#ff7a59" />
-              </label>
-              <label class="field thickness">
-                Thickness
-                <input id="widthInput" type="range" min="2" max="14" value="5" />
-              </label>
-              <label class="toggle">
-                <input type="checkbox" id="syncToggle" />
-                Sync playback
-              </label>
-              <div class="view-switch" aria-label="Video view mode">
-                <button type="button" class="selected" data-video-view="primary">Video 1</button>
-                <button type="button" data-video-view="compare">Video 2</button>
-                <button type="button" data-video-view="split">Both</button>
-                <button type="button" data-video-view="frame">Frame</button>
-              </div>
-            </div>
-
-            <div class="video-layout" id="videoLayout">
-              <article class="video-pane primary-pane">
-                <video id="videoA" playsinline></video>
-                <canvas id="captureCanvas"></canvas>
-                <canvas id="annotationCanvas"></canvas>
-                <div class="empty-state" id="emptyA">
-                  <strong>Drag media here from the Library</strong>
-                  <span>Import footage with Upload, then drag a video or still image into the Original window.</span>
-                </div>
-              </article>
-              <article class="video-pane compare-pane" id="comparePane">
-                <video id="videoB" playsinline></video>
-                <canvas id="compareCaptureCanvas"></canvas>
-                <canvas id="compareAnnotationCanvas"></canvas>
-                <div class="empty-state compact-empty" id="emptyB">
-                  <strong>Drag comparison video here</strong>
-                  <span>Import footage with Upload, then drag a video into the Comparison window.</span>
-                </div>
-              </article>
-              <article class="video-pane frame-pane" id="framePane">
-                <canvas id="frameCaptureCanvas"></canvas>
-                <canvas id="frameAnnotationCanvas"></canvas>
-                <div class="empty-state" id="emptyFrame">
-                  <strong>Select a saved frame</strong>
-                  <span>Open Saved Frames, then click an image to review and annotate it here.</span>
-                </div>
-              </article>
-            </div>
-            <div class="frame-strip-layout">
-              <section class="frame-strip-panel primary-frame-strip-panel" aria-label="Video frames">
-                <div class="frame-strip-head">
-                  <strong>Frames</strong>
-                  <span id="frameStripStatus">Add a video to inspect frames</span>
-                </div>
-                <div class="frame-strip" id="frameStrip" tabindex="0" aria-label="Scroll frame by frame"></div>
-              </section>
-              <section class="frame-strip-panel compare-frame-strip-panel" aria-label="Comparison video frames">
-                <div class="frame-strip-head">
-                  <strong>Comparison Frames</strong>
-                  <span id="compareFrameStripStatus">Add a comparison video to inspect frames</span>
-                </div>
-                <div class="frame-strip" id="compareFrameStrip" tabindex="0" aria-label="Scroll comparison video frame by frame"></div>
-              </section>
-            </div>
-            <div class="preview-control-layer">
-              <div class="transport-stack">
-                <div class="preview-transport primary-preview-transport" aria-label="Playback controls">
-                  <span class="transport-label">Video 1</span>
-                  <button id="playBtn">Play</button>
-                  <button id="backFrameBtn" title="Back 1 frame" aria-label="Back 1 frame">&lt;</button>
-                  <button id="nextFrameBtn" title="Forward 1 frame" aria-label="Forward 1 frame">&gt;</button>
-                </div>
-                <div class="preview-transport compare-preview-transport" aria-label="Comparison playback controls">
-                  <span class="transport-label">Video 2</span>
-                  <button id="comparePlayBtn" type="button">Play</button>
-                  <button id="compareBackFrameBtn" type="button" title="Comparison back 1 frame" aria-label="Comparison back 1 frame">&lt;</button>
-                  <button id="compareNextFrameBtn" type="button" title="Comparison forward 1 frame" aria-label="Comparison forward 1 frame">&gt;</button>
-                </div>
-              </div>
-              <div class="timeline-stack">
-                <label>
-                  A
-                  <input id="timelineA" type="range" min="0" max="1000" value="0" />
-                  <span id="timeA">00:00.00</span>
-                </label>
-                <label id="timelineBRow">
-                  B
-                  <input id="timelineB" type="range" min="0" max="1000" value="0" />
-                  <span id="timeB">00:00.00</span>
-                </label>
-              </div>
-            </div>
-          </section>
-
-          <aside class="inspector" aria-label="Notes and saved frames">
-            <div class="inspector-title">
-              <h2>Inspector</h2>
-              <div class="inspector-tabs" role="tablist" aria-label="Inspector sections">
-                <button class="selected" type="button" id="aiTabBtn" data-inspector-tab="ai">AI Coach</button>
-                <button type="button" id="notesTabBtn" data-inspector-tab="notes">Mechanics Notes</button>
-                <button type="button" id="framesTabBtn" data-inspector-tab="frames">Saved Frames</button>
-              </div>
-            </div>
-
-            <section class="inspector-panel ai-panel selected" id="aiPanel" aria-live="polite">
-              <div class="panel-heading">
-                <button id="aiAnalyzeBtn" type="button">Analyze</button>
-                <button id="inspectorSaveFrameBtn" type="button">Saved Frame</button>
-                <button class="ai-status" id="evaluationTabBtn" type="button">Evaluation</button>
-              </div>
-              <div class="ai-saved-frame-list" id="aiSavedFrameList"></div>
-              <div class="evaluation-list" id="evaluationList"></div>
-              <div class="ai-result" id="aiResult">
-                <p>Save swing frames, then select Analyze to get AI coaching feedback on what looks correct, what needs work, and how to fix it.</p>
-              </div>
-            </section>
-
-            <section class="inspector-panel" id="notesPanel" hidden>
-              <div class="panel-heading">
-                <h2>Mechanics Notes</h2>
-                <button id="saveNoteBtn">Save</button>
-              </div>
-              <textarea id="notesInput" placeholder="Posture, balance, timing, joint angles, alignment, body position, tempo, stability, control, follow-through..."></textarea>
-              <div class="mechanics-note-list" id="mechanicsNoteList"></div>
-            </section>
-
-            <section class="inspector-panel" id="framesPanel" hidden>
-              <div class="panel-heading">
-                <button id="panelSaveFrameBtn" type="button">Saved Frame</button>
-                <button class="primary-button accent" id="exportBtn" type="button">Export</button>
-              </div>
-              <div class="saved-list" id="savedFrames"></div>
-            </section>
-          </aside>
-        </section>
-
-        <section class="dashboard-view" id="dashboardView" aria-label="Dashboard" hidden>
-          <header class="dashboard-header">
-            <div>
-              <h2>Dashboard</h2>
-              <p>Projects, workspace settings, and billing for your private coach account.</p>
-            </div>
-          </header>
-
-          <div class="dashboard-body">
-            <nav class="dashboard-side-menu" aria-label="Dashboard menu">
-              <button type="button" class="selected" data-dashboard-target="projects">Projects</button>
-              <button type="button" data-dashboard-target="settings">Settings</button>
-              <button type="button" data-dashboard-target="billing">Billing</button>
-              <button type="button" id="dashboardSideSignOutBtn">Sign Out</button>
-            </nav>
-
-            <div class="dashboard-grid">
-              <section class="dashboard-panel projects-dashboard" id="dashboardProjectsPanel" data-dashboard-section="projects">
-                <div class="panel-heading">
-                  <h2>All Projects</h2>
-                  <div class="panel-actions">
-                    <button type="button" class="primary-button" id="newProjectBtn">New Project</button>
-                    <span id="dashboardProjectCount">0</span>
-                  </div>
-                </div>
-                <div class="dashboard-projects" id="dashboardProjects"></div>
-              </section>
-
-              <section class="dashboard-panel settings-panel" id="dashboardSettingsPanel" data-dashboard-section="settings" hidden>
-                <div class="panel-heading">
-                  <h2>Settings</h2>
-                </div>
-                <label class="field">
-                  Default athlete
-                  <input id="defaultAthleteInput" placeholder="Add athlete name" />
-                </label>
-                <label class="field">
-                  Coach display name
-                  <input id="coachDisplayNameInput" placeholder="Add coach name" />
-                </label>
-                <label class="field">
-                  Report footer
-                  <input id="reportFooterInput" placeholder="Add report footer" />
-                </label>
-                <label class="toggle dashboard-toggle">
-                  <input type="checkbox" id="includeSavedFramesToggle" checked />
-                  Include saved frames in reports
-                </label>
-              </section>
-
-              <section class="dashboard-panel billing-panel" id="dashboardBillingPanel" data-dashboard-section="billing" hidden>
-                <div class="panel-heading">
-                  <h2>Billing</h2>
-                </div>
-                <section class="plan-card">
-                  <span id="planLabel">Free workspace</span>
-                  <strong id="accessLabel">Upgrade for compare, reports, and exports</strong>
-                  <button id="checkoutMonthlyBtn">Start Pro monthly - $12/mo</button>
-                  <button id="checkoutAnnualBtn">Start Pro annual - $130/yr</button>
-                  <button id="portalBtn" class="subtle">Billing portal</button>
-                </section>
-                <div class="billing-actions">
-                  <button class="ghost-button" id="pricingBtn">View pricing</button>
-                  <button class="ghost-button" id="dashboardPortalBtn">Manage subscription</button>
-                </div>
-              </section>
-            </div>
+          <div class="product-preview hero-screenshot" aria-label="DiamondFrame editor preview">
+            <img src="./src/assets/hero-compare-screenshot.png" alt="DiamondFrame compare mode with two training clips and coaching tools" />
           </div>
         </section>
 
+        <section class="landing-band workflow-band">
+          <div class="section-heading">
+            <h2>From raw clip to clear coaching notes</h2>
+            <p>Keep the full review loop in one focused workspace.</p>
+          </div>
+          <div class="workflow-grid">
+            <article>
+              <span>01</span>
+              <h3>Upload</h3>
+              <p>Add training videos or still images from any session.</p>
+            </article>
+            <article>
+              <span>02</span>
+              <h3>Scrub</h3>
+              <p>Pause, step frame by frame, and capture the exact moment that matters.</p>
+            </article>
+            <article>
+              <span>03</span>
+              <h3>Annotate</h3>
+              <p>Draw lines, arrows, circles, freehand marks, and text notes directly on frames.</p>
+            </article>
+            <article>
+              <span>04</span>
+              <h3>Share</h3>
+              <p>Save frames, compare progress, and export session reports for follow-up.</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="landing-band features-band" id="features">
+          <div class="section-heading">
+            <h2>Built for repeatable video review</h2>
+            <p>Everything a coach needs to turn movement footage into useful feedback.</p>
+          </div>
+          <figure class="section-image">
+            <img src="./src/assets/features-compare-screenshot.png" alt="DiamondFrame compare mode with two training clips and coaching tools" />
+          </figure>
+          <div class="feature-grid">
+            <article><h3>Frame stepping</h3><p>Move through a clip precisely and capture key positions.</p></article>
+            <article><h3>Annotation tools</h3><p>Use freehand marks, lines, arrows, circles, and text notes.</p></article>
+            <article><h3>Saved frames</h3><p>Organize captured moments by athlete, date, notes, and timestamp.</p></article>
+            <article><h3>Compare mode</h3><p>Review two clips side by side with independent or synced playback.</p></article>
+            <article><h3>Session reports</h3><p>Export concise notes and saved image sets after a review.</p></article>
+            <article><h3>Private workspace</h3><p>Keep videos, frames, reports, and billing tied to each coach account.</p></article>
+          </div>
+        </section>
+
+        <section class="landing-band audience-band">
+          <div class="section-heading">
+            <h2>For any sport, any training room</h2>
+            <p>Use DiamondFrame wherever technique, timing, posture, or repeatable movement matters.</p>
+          </div>
+          <figure class="section-image">
+            <img src="./src/assets/audience-golf-screenshot.png" alt="DiamondFrame golf technique review with annotations" />
+          </figure>
+          <div class="audience-row">
+            <span>Coaches</span>
+            <span>Trainers</span>
+            <span>Instructors</span>
+            <span>Academies</span>
+            <span>Clubs</span>
+            <span>Performance staff</span>
+            <span>Athletes</span>
+          </div>
+        </section>
+
+        <section class="landing-band pricing-band" id="pricing">
+          <div class="section-heading">
+            <h2>Simple plans for growing review work</h2>
+            <p>Start with single-video analysis, then unlock comparison and exports when the workflow grows.</p>
+          </div>
+          <div class="landing-pricing-grid">
+            <article>
+              <h3>Coach</h3>
+              <strong>$12/mo</strong>
+              <p>Monthly access for single-video analysis, uploads, and saved frames.</p>
+            </article>
+            <article class="featured-plan">
+              <h3>Pro Coach</h3>
+              <strong>$130/yr</strong>
+              <p>Yearly access with compare mode, unlimited uploads, reports, image sets, and exports.</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="landing-cta">
+          <h2>Turn training video into better feedback.</h2>
+          <a class="landing-primary" href="./app.html">Launch editor</a>
+        </section>
       </main>
-
-      <input id="fileA" type="file" accept="video/*,image/*" multiple hidden />
-      <input id="athleteInput" hidden />
-      <input id="sessionInput" type="date" hidden />
-    </div>
-
-    <dialog id="authDialog" class="modal">
-      <form method="dialog" class="modal-card" id="authForm">
-        <button class="close-button" type="button" data-close="authDialog" aria-label="Close">x</button>
-        <h2>Coach Workspace</h2>
-        <p>Sign in to keep athletes, videos, frames, reports, and billing private to your account.</p>
-        <label class="field">
-          Email
-          <input id="emailInput" type="email" placeholder="coach@example.com" required />
-        </label>
-        <label class="field">
-          Password
-          <input id="passwordInput" type="password" minlength="6" placeholder="••••••••" required />
-        </label>
-        <div class="modal-actions">
-          <button id="loginBtn" class="primary-button" value="login">Log in</button>
-          <button id="signupBtn" class="ghost-button" value="signup">Create account</button>
-        </div>
-      </form>
-    </dialog>
-
-    <dialog id="pricingDialog" class="modal">
-      <form method="dialog" class="modal-card pricing-modal">
-        <button class="close-button" type="button" data-close="pricingDialog" aria-label="Close">x</button>
-        <h2>Plans</h2>
-        <div class="pricing-grid">
-          <article>
-            <h3>Free</h3>
-            <strong>$0</strong>
-            <p>Single-video analysis, five uploads, basic saved frames.</p>
-          </article>
-          <article class="featured">
-            <h3>Pro Coach</h3>
-            <strong>$12/mo or $130/yr</strong>
-            <p>Compare mode, unlimited uploads, reports, image sets, and exports.</p>
-            <button id="pricingMonthlyBtn" class="primary-button accent" value="checkout">Monthly</button>
-            <button id="pricingAnnualBtn" class="primary-button accent" value="checkout">Annual</button>
-          </article>
-        </div>
-      </form>
-    </dialog>
-
-    <dialog id="newProjectDialog" class="modal">
-      <form class="modal-card" id="newProjectForm">
-        <button class="close-button" type="button" data-close="newProjectDialog" aria-label="Close">x</button>
-        <h2 id="projectDialogTitle">New Project</h2>
-        <p id="projectDialogCopy">Add the athlete details for this project. Only the athlete name is required.</p>
-        <label class="field">
-          Athlete's Name
-          <input id="projectAthleteInput" name="athlete" placeholder="Add athlete name" required />
-        </label>
-        <label class="field">
-          Sport
-          <input id="projectSportInput" name="sport" placeholder="Baseball, softball, golf..." />
-        </label>
-        <label class="field">
-          Age
-          <input id="projectAgeInput" name="age" type="number" min="1" max="120" placeholder="Age" />
-        </label>
-        <label class="field">
-          Team
-          <input id="projectTeamInput" name="team" placeholder="Team name" />
-        </label>
-        <div class="modal-actions">
-          <button class="ghost-button danger-button" id="projectDeleteBtn" type="button" hidden>Delete Project</button>
-          <button class="primary-button accent" id="projectContinueBtn" type="submit">Continue</button>
-        </div>
-      </form>
-    </dialog>
-
-    <dialog id="deleteProjectDialog" class="modal">
-      <form class="modal-card confirm-modal" id="deleteProjectForm">
-        <button class="close-button" type="button" data-close="deleteProjectDialog" aria-label="Close">x</button>
-        <h2>Delete Project</h2>
-        <p id="deleteProjectCopy">This project will be permanently deleted.</p>
-        <div class="modal-actions">
-          <button class="ghost-button" type="button" data-close="deleteProjectDialog">Cancel</button>
-          <button class="primary-button danger-button" id="confirmDeleteProjectBtn" type="submit">Delete Project</button>
-        </div>
-      </form>
-    </dialog>
-
-    <dialog id="savedFrameEditDialog" class="modal">
-      <form class="modal-card saved-frame-edit-modal" method="dialog">
-        <button class="close-button" type="button" data-close="savedFrameEditDialog" aria-label="Close">x</button>
-        <h2>Edit Saved Frame</h2>
-        <p>Use the Frame view drawing tools to annotate this image. Notes and annotations save to this saved frame.</p>
-        <label class="field">
-          Frame Notes
-          <textarea id="savedFrameNoteInput" placeholder="Add coaching notes for this frame..."></textarea>
-        </label>
-        <div class="modal-actions">
-          <button class="ghost-button danger-button" id="savedFrameDeleteBtn" type="button">Delete</button>
-          <button class="primary-button accent" id="savedFrameSaveBtn" type="submit">Save</button>
-        </div>
-      </form>
-    </dialog>
-
-    <dialog id="mechanicsNoteDialog" class="modal">
-      <form class="modal-card mechanics-note-modal" method="dialog">
-        <button class="close-button" type="button" data-close="mechanicsNoteDialog" aria-label="Close">x</button>
-        <h2>Edit Note</h2>
-        <label class="field">
-          Mechanics Note
-          <textarea id="mechanicsNoteEditInput" placeholder="Update this note..."></textarea>
-        </label>
-        <div class="modal-actions">
-          <button class="ghost-button danger-button" id="mechanicsNoteDeleteBtn" type="button">Delete</button>
-          <button class="primary-button accent" id="mechanicsNoteSaveBtn" type="submit">Save</button>
-        </div>
-      </form>
-    </dialog>
-
-    <dialog id="evaluationDialog" class="modal">
-      <form class="modal-card evaluation-modal" method="dialog">
-        <button class="close-button" type="button" data-close="evaluationDialog" aria-label="Close">x</button>
-        <h2>Evaluation</h2>
-        <div class="evaluation-dialog-body" id="evaluationDialogBody"></div>
-        <div class="modal-actions">
-          <button class="ghost-button danger-button" id="evaluationDeleteBtn" type="button">Delete</button>
-          <button class="ghost-button" id="evaluationExportBtn" type="button">Export PDF</button>
-          <button class="primary-button accent" id="evaluationCloseBtn" type="submit">Done</button>
-        </div>
-      </form>
-    </dialog>
-
-    <script type="module" src="./src/app.js"></script>
+    </section>
   </body>
 </html>
