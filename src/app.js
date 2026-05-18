@@ -1808,18 +1808,6 @@ function getAuthPageMode() {
   return document.querySelector("[data-auth-mode].selected")?.dataset.authMode || "signup";
 }
 
-async function completeAuth(email) {
-  state.user = {
-    id: state.user?.id || crypto.randomUUID(),
-    email
-  };
-  localStorage.setItem("diamondframe.user", JSON.stringify(state.user));
-  await loadProjectsFromSupabase();
-  updateAccess();
-  setDashboardSection("projects");
-  setView("dashboard");
-}
-
 async function submitAuthPage(event) {
   event.preventDefault();
   const email = $("#authEmailInput")?.value.trim();
@@ -1851,11 +1839,38 @@ async function submitAuthPage(event) {
       return;
     }
     const user = result.data.user || result.data.session?.user;
-    if (user) await completeAuth(user.email || email);
+    if (user) await completeAuth(user, email);
     return;
   }
 
   await completeAuth(email);
+}
+
+function getFallbackUser(email) {
+  return {
+    id: state.user?.id || crypto.randomUUID(),
+    email
+  };
+}
+
+function getSupabaseUser(authUser, email) {
+  return authUser?.id
+    ? { id: authUser.id, email: authUser.email || email }
+    : getFallbackUser(email);
+}
+
+async function completeAuth(authUserOrEmail, fallbackEmail = "") {
+  const email = typeof authUserOrEmail === "string"
+    ? authUserOrEmail
+    : authUserOrEmail?.email || fallbackEmail;
+  state.user = typeof authUserOrEmail === "string"
+    ? getFallbackUser(email)
+    : getSupabaseUser(authUserOrEmail, email);
+  localStorage.setItem("diamondframe.user", JSON.stringify(state.user));
+  await loadProjectsFromSupabase();
+  updateAccess();
+  setDashboardSection("projects");
+  setView("dashboard");
 }
 
 function persistProjects() {
@@ -2282,6 +2297,7 @@ async function loadSupabaseSession() {
     id: data.session.user.id,
     email: data.session.user.email
   };
+  localStorage.setItem("diamondframe.user", JSON.stringify(state.user));
   const { data: profile } = await supabase
     .from("profiles")
     .select("subscription_status")
@@ -2565,22 +2581,13 @@ $("#authForm").addEventListener("submit", async (event) => {
       return;
     }
     const user = result.data.user || result.data.session?.user;
-    state.user = { id: user.id, email: user.email };
-    localStorage.setItem("diamondframe.user", JSON.stringify(state.user));
-    await loadProjectsFromSupabase();
+    await completeAuth(user, email);
     $("#authDialog").close();
-    updateAccess();
     return;
   }
 
-  state.user = {
-    id: crypto.randomUUID(),
-    email
-  };
-  localStorage.setItem("diamondframe.user", JSON.stringify(state.user));
-  await loadProjectsFromSupabase();
+  await completeAuth(email);
   $("#authDialog").close();
-  updateAccess();
 });
 
 setupSectionResize();
