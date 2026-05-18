@@ -609,19 +609,20 @@ function persistEvaluations() {
 function renderEvaluationList() {
   const list = $("#evaluationList");
   if (!list) return;
-  if (!state.evaluations.length) {
+  const evaluations = state.evaluations.filter((evaluation) => !isConnectionFallbackEvaluation(evaluation));
+  if (!evaluations.length) {
     list.innerHTML = "";
     return;
   }
 
-  list.innerHTML = state.evaluations.map((evaluation, index) => {
+  list.innerHTML = evaluations.map((evaluation, index) => {
     const result = evaluation.result || {};
     const date = new Date(evaluation.created_at);
     return `
       <article class="evaluation-item" data-evaluation-id="${evaluation.id}">
         <div>
           <strong>${escapeHtml(evaluation.athlete || "Athlete")}</strong>
-          <span>Evaluation ${state.evaluations.length - index} · ${date.toLocaleDateString()} · ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+          <span>Evaluation ${evaluations.length - index} · ${date.toLocaleDateString()} · ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
           <p>${escapeHtml(result.issue || "AI coaching assessment")}</p>
         </div>
         <button type="button" data-open-evaluation="${evaluation.id}">Evaluation</button>
@@ -630,7 +631,27 @@ function renderEvaluationList() {
   }).join("");
 }
 
+function isConnectionFallbackResult(result = {}) {
+  const text = [
+    result.issue,
+    result.confidence,
+    result.sport,
+    ...(Array.isArray(result.weaknesses) ? result.weaknesses : []),
+    ...(Array.isArray(result.evidence) ? result.evidence : []),
+    ...(Array.isArray(result.corrections) ? result.corrections : [])
+  ].filter(Boolean).join(" ").toLowerCase();
+  return text.includes("openai_api_key")
+    || text.includes("analysis service is not configured")
+    || text.includes("analysis is not connected")
+    || text.includes("backend is not connected");
+}
+
+function isConnectionFallbackEvaluation(evaluation = {}) {
+  return Boolean(evaluation.demo && isConnectionFallbackResult(evaluation.result || {}));
+}
+
 function saveEvaluation(result, frameCount, options = {}) {
+  if (options.demo && isConnectionFallbackResult(result)) return null;
   const evaluation = createEvaluation(result, frameCount, options);
   state.evaluations.unshift(evaluation);
   persistEvaluations();
@@ -1359,7 +1380,7 @@ async function loadSavedFramesFromSupabase(localFrames = []) {
 function evaluationFromRow(row) {
   const metadata = row.metadata || {};
   const evaluation = metadata.evaluation || {};
-  return {
+  const item = {
     id: row.id,
     project_id: row.player_id,
     athlete: metadata.athlete || getSelectedProject()?.athlete || "Athlete",
@@ -1368,6 +1389,7 @@ function evaluationFromRow(row) {
     demo: Boolean(metadata.demo),
     result: evaluation.result || evaluation || { issue: row.body || "Evaluation" }
   };
+  return isConnectionFallbackEvaluation(item) ? null : item;
 }
 
 function evaluationToRow(evaluation) {
@@ -1423,9 +1445,17 @@ async function loadEvaluationsFromSupabase(localEvaluations = []) {
     return localEvaluations;
   }
 
-  const remoteEvaluations = (data || []).map(evaluationFromRow);
+  const staleEvaluationIds = [];
+  const remoteEvaluations = (data || []).map((row) => {
+    const evaluation = evaluationFromRow(row);
+    if (!evaluation) staleEvaluationIds.push(row.id);
+    return evaluation;
+  }).filter(Boolean);
+  staleEvaluationIds.forEach((id) => deleteEvaluationFromSupabase(id));
   const remoteIds = new Set(remoteEvaluations.map((evaluation) => evaluation.id));
-  const localOnlyEvaluations = localEvaluations.filter((evaluation) => evaluation.id && !remoteIds.has(evaluation.id));
+  const localOnlyEvaluations = localEvaluations.filter((evaluation) => (
+    evaluation.id && !remoteIds.has(evaluation.id) && !isConnectionFallbackEvaluation(evaluation)
+  ));
   if (localOnlyEvaluations.length) {
     await Promise.all(localOnlyEvaluations.map(saveEvaluationToSupabase));
   }

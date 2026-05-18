@@ -112,7 +112,7 @@ export default async function handler(request, response) {
   }
 
   if (!process.env.OPENAI_API_KEY) {
-    json(response, 200, { result: fallbackResult, demo: true });
+    json(response, 503, { error: fallbackResult.issue, result: fallbackResult, demo: true });
     return;
   }
 
