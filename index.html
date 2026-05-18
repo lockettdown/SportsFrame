@@ -335,34 +335,6 @@
           </div>
         </section>
 
-        <div
-          class="section-resizer timeline-resizer"
-          id="timelineResizer"
-          role="separator"
-          aria-orientation="horizontal"
-          aria-label="Resize timeline sequence"
-          tabindex="0"
-        ></div>
-
-        <footer class="timeline" aria-label="Timeline controls">
-          <div class="timeline-head">
-            <strong>Timeline</strong>
-            <span>Sequence 01</span>
-            <span>01:24:12</span>
-          </div>
-          <div class="transport">
-            <button id="compareBtn">Compare</button>
-            <button id="annotateBtn">Annotate</button>
-            <div class="timeline-tools" aria-label="Timeline editing tools">
-              <button id="selectToolBtn" type="button" class="timeline-tool active" data-edit-tool="select">Select</button>
-              <button id="muteAudioBtn" type="button" class="timeline-tool" aria-pressed="false">Mute Audio</button>
-            </div>
-          </div>
-          <div class="track-stack" aria-hidden="true">
-            <div class="track-row main-track" id="videoTrack"><span>V1</span><div class="track-clips"></div></div>
-            <div class="track-row audio-track" id="audioTrack"><span>A1</span><div class="track-clips"></div></div>
-          </div>
-        </footer>
       </main>
 
       <input id="fileA" type="file" accept="video/*,image/*" multiple hidden />
@@ -489,6 +461,7 @@
         <div class="evaluation-dialog-body" id="evaluationDialogBody"></div>
         <div class="modal-actions">
           <button class="ghost-button danger-button" id="evaluationDeleteBtn" type="button">Delete</button>
+          <button class="ghost-button" id="evaluationExportBtn" type="button">Export PDF</button>
           <button class="primary-button accent" id="evaluationCloseBtn" type="submit">Done</button>
         </div>
       </form>

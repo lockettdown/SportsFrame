@@ -3640,12 +3640,11 @@ input[type="range"] {
 /* Preview resize and scrubber placement overrides. */
 .editor-shell {
   --library-width: clamp(220px, 19vw, 310px);
-  --timeline-height: clamp(96px, 12vh, 138px);
   --resizer-size: 7px;
 }
 
 .editor-shell .workbench {
-  grid-template-rows: 52px minmax(0, 1fr) var(--resizer-size) var(--timeline-height);
+  grid-template-rows: 52px minmax(0, 1fr);
 }
 
 .editor-shell .editor-grid {

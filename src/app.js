@@ -69,8 +69,7 @@ const sessionInput = $("#sessionInput");
 if (sessionInput) sessionInput.valueAsDate = new Date();
 
 const layoutStorageKeys = {
-  libraryWidth: "diamondframe.layout.libraryWidth",
-  timelineHeight: "diamondframe.layout.timelineHeight"
+  libraryWidth: "diamondframe.layout.libraryWidth"
 };
 
 function clampNumber(value, min, max) {
@@ -98,8 +97,8 @@ function setLayoutDimension(type, value, shouldPersist = false) {
 
   const bounds = getLayoutBounds(type);
   const clamped = clampNumber(value, bounds.min, bounds.max);
-  const property = type === "library" ? "--library-width" : "--timeline-height";
-  const storageKey = type === "library" ? layoutStorageKeys.libraryWidth : layoutStorageKeys.timelineHeight;
+  const property = "--library-width";
+  const storageKey = layoutStorageKeys.libraryWidth;
 
   app.style.setProperty(property, `${Math.round(clamped)}px`);
   if (shouldPersist) localStorage.setItem(storageKey, String(Math.round(clamped)));
@@ -108,32 +107,26 @@ function setLayoutDimension(type, value, shouldPersist = false) {
 
 function applySavedLayoutDimensions() {
   const libraryWidth = Number(localStorage.getItem(layoutStorageKeys.libraryWidth));
-  const timelineHeight = Number(localStorage.getItem(layoutStorageKeys.timelineHeight));
 
   if (Number.isFinite(libraryWidth) && libraryWidth > 0) setLayoutDimension("library", libraryWidth);
-  if (Number.isFinite(timelineHeight) && timelineHeight > 0) setLayoutDimension("timeline", timelineHeight);
 }
 
 function setupSectionResize() {
   const libraryResizer = $("#libraryResizer");
-  const timelineResizer = $("#timelineResizer");
   const libraryPanel = $(".media-browser");
-  const timelinePanel = $(".timeline");
   let activeResize = null;
 
   applySavedLayoutDimensions();
 
   function beginResize(event, type) {
-    const panel = type === "library" ? libraryPanel : timelinePanel;
+    const panel = libraryPanel;
     if (!panel || event.currentTarget.offsetParent === null) return;
 
     activeResize = {
       type,
       startX: event.clientX,
       startY: event.clientY,
-      startSize: type === "library"
-        ? panel.getBoundingClientRect().width
-        : panel.getBoundingClientRect().height,
+      startSize: panel.getBoundingClientRect().width,
       handle: event.currentTarget
     };
 
@@ -146,19 +139,15 @@ function setupSectionResize() {
   function updateResize(event) {
     if (!activeResize) return;
 
-    const delta = activeResize.type === "library"
-      ? event.clientX - activeResize.startX
-      : activeResize.startY - event.clientY;
+    const delta = event.clientX - activeResize.startX;
     setLayoutDimension(activeResize.type, activeResize.startSize + delta);
   }
 
   function finishResize() {
     if (!activeResize) return;
 
-    const panel = activeResize.type === "library" ? libraryPanel : timelinePanel;
-    const size = activeResize.type === "library"
-      ? panel.getBoundingClientRect().width
-      : panel.getBoundingClientRect().height;
+    const panel = libraryPanel;
+    const size = panel.getBoundingClientRect().width;
     setLayoutDimension(activeResize.type, size, true);
     activeResize.handle.classList.remove("active-resizer");
     document.body.classList.remove("is-resizing");
@@ -166,30 +155,21 @@ function setupSectionResize() {
   }
 
   function nudgeResize(event, type) {
-    const panel = type === "library" ? libraryPanel : timelinePanel;
+    const panel = libraryPanel;
     if (!panel) return;
 
     let delta = 0;
-    if (type === "library") {
-      if (event.key === "ArrowLeft") delta = -16;
-      if (event.key === "ArrowRight") delta = 16;
-    } else {
-      if (event.key === "ArrowUp") delta = 16;
-      if (event.key === "ArrowDown") delta = -16;
-    }
+    if (event.key === "ArrowLeft") delta = -16;
+    if (event.key === "ArrowRight") delta = 16;
     if (!delta) return;
 
-    const currentSize = type === "library"
-      ? panel.getBoundingClientRect().width
-      : panel.getBoundingClientRect().height;
+    const currentSize = panel.getBoundingClientRect().width;
     setLayoutDimension(type, currentSize + delta, true);
     event.preventDefault();
   }
 
   libraryResizer?.addEventListener("pointerdown", (event) => beginResize(event, "library"));
-  timelineResizer?.addEventListener("pointerdown", (event) => beginResize(event, "timeline"));
   libraryResizer?.addEventListener("keydown", (event) => nudgeResize(event, "library"));
-  timelineResizer?.addEventListener("keydown", (event) => nudgeResize(event, "timeline"));
   window.addEventListener("pointermove", updateResize);
   window.addEventListener("pointerup", finishResize);
   window.addEventListener("pointercancel", finishResize);
@@ -654,6 +634,7 @@ function saveEvaluation(result, frameCount, options = {}) {
   const evaluation = createEvaluation(result, frameCount, options);
   state.evaluations.unshift(evaluation);
   persistEvaluations();
+  saveEvaluationToSupabase(evaluation);
   renderEvaluationList();
   return evaluation;
 }
@@ -678,11 +659,95 @@ function openEvaluation(evaluationId) {
 }
 
 function deleteEditingEvaluation() {
+  const evaluationId = state.editingEvaluationId;
   state.evaluations = state.evaluations.filter((item) => item.id !== state.editingEvaluationId);
   state.editingEvaluationId = null;
   persistEvaluations();
+  deleteEvaluationFromSupabase(evaluationId);
   renderEvaluationList();
   $("#evaluationDialog")?.close();
+}
+
+function getEditingEvaluation() {
+  return state.evaluations.find((item) => item.id === state.editingEvaluationId) || null;
+}
+
+function evaluationPdfSection(title, items = []) {
+  if (!items.length) return "";
+  return `
+    <section>
+      <h2>${escapeHtml(title)}</h2>
+      <ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+    </section>
+  `;
+}
+
+function exportEvaluationPdf() {
+  const evaluation = getEditingEvaluation();
+  if (!evaluation) {
+    alert("Open an evaluation before exporting.");
+    return;
+  }
+
+  const result = evaluation.result || {};
+  const athlete = evaluation.athlete || "Athlete";
+  const created = new Date(evaluation.created_at).toLocaleString();
+  const filename = `${athlete.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "evaluation"}-evaluation.pdf`;
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(athlete)} Evaluation</title>
+  <style>
+    @page { margin: 0.65in; }
+    body { margin: 0; color: #17181d; font-family: Arial, sans-serif; line-height: 1.45; }
+    header { border-bottom: 2px solid #2563eb; padding-bottom: 16px; margin-bottom: 22px; }
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    header p { margin: 4px 0; color: #596173; }
+    .summary { padding: 16px; border: 1px solid #d9dce3; border-radius: 8px; background: #f6f8fb; margin-bottom: 20px; }
+    .summary span { display: block; margin-bottom: 6px; color: #2563eb; font-size: 12px; font-weight: 700; text-transform: uppercase; }
+    .summary strong { display: block; font-size: 18px; }
+    section { page-break-inside: avoid; margin: 0 0 18px; }
+    h2 { margin: 0 0 8px; color: #252a35; font-size: 15px; text-transform: uppercase; }
+    ul { margin: 0; padding-left: 22px; }
+    li { margin: 0 0 7px; }
+    footer { margin-top: 26px; color: #596173; font-size: 12px; border-top: 1px solid #d9dce3; padding-top: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>${escapeHtml(athlete)} Evaluation</h1>
+    <p>${escapeHtml(created)} · ${evaluation.frameCount || 0} frame${evaluation.frameCount === 1 ? "" : "s"}</p>
+    <p>Exported from DiamondFrame</p>
+  </header>
+  <main>
+    <div class="summary">
+      <span>${escapeHtml(result.sport || "AI Coach")}</span>
+      <strong>${escapeHtml(result.issue || "Evaluation")}</strong>
+    </div>
+    ${evaluationPdfSection("What Looks Correct", result.strengths)}
+    ${evaluationPdfSection("What Needs Work", result.weaknesses)}
+    ${evaluationPdfSection("Evidence", result.evidence)}
+    ${evaluationPdfSection("Corrections", result.corrections)}
+    ${evaluationPdfSection("Drills", result.drills)}
+  </main>
+  <footer>${escapeHtml(result.disclaimer || "AI feedback is coaching guidance only and is not a medical diagnosis.")}</footer>
+  <script>
+    document.title = ${JSON.stringify(filename)};
+    window.addEventListener("load", () => {
+      window.print();
+    });
+  </script>
+</body>
+</html>`;
+  const printWindow = window.open("", "_blank", "noopener,noreferrer");
+  if (!printWindow) {
+    alert("Allow popups for this site to export the evaluation PDF.");
+    return;
+  }
+  printWindow.document.open();
+  printWindow.document.write(html);
+  printWindow.document.close();
 }
 
 function renderAiResultMarkup(result, options = {}) {
@@ -1213,6 +1278,160 @@ function readProjectJson(name, fallback = []) {
   }
 }
 
+function savedFrameFromRow(row) {
+  const metadata = row.metadata || {};
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    project_id: row.player_id,
+    athlete: metadata.athlete || getSelectedProject()?.athlete || "Athlete",
+    session_date: metadata.session_date || "",
+    note: metadata.note || "",
+    created_at: row.created_at,
+    updated_at: metadata.updated_at,
+    source: row.source || "Original",
+    image: row.image_path,
+    baseImage: row.base_image_path || row.image_path,
+    annotations: Array.isArray(metadata.annotations) ? metadata.annotations : []
+  };
+}
+
+function savedFrameToRow(frame) {
+  return {
+    id: frame.id,
+    user_id: state.user?.id,
+    player_id: frame.project_id || state.selectedProjectId,
+    frame_time_seconds: Number(frame.time || 0),
+    image_path: frame.image,
+    base_image_path: frame.baseImage || null,
+    source: frame.source || "Original",
+    metadata: {
+      athlete: frame.athlete || getSelectedProject()?.athlete || "Athlete",
+      session_date: frame.session_date || "",
+      note: frame.note || "",
+      annotations: frame.annotations || [],
+      updated_at: frame.updated_at || null
+    },
+    created_at: frame.created_at || new Date().toISOString()
+  };
+}
+
+async function saveSavedFrameToSupabase(frame) {
+  if (!supabase || !state.user?.id || !state.selectedProjectId || !frame?.image) return;
+  const { error } = await supabase.from("saved_frames").upsert(savedFrameToRow(frame), { onConflict: "id" });
+  if (error) console.warn("Could not save frame to Supabase", error.message);
+}
+
+async function deleteSavedFrameFromSupabase(frameId) {
+  if (!supabase || !state.user?.id || !frameId) return;
+  const { error } = await supabase
+    .from("saved_frames")
+    .delete()
+    .eq("id", frameId)
+    .eq("user_id", state.user.id);
+  if (error) console.warn("Could not delete frame from Supabase", error.message);
+}
+
+async function loadSavedFramesFromSupabase(localFrames = []) {
+  if (!supabase || !state.user?.id || !state.selectedProjectId) return localFrames;
+
+  const { data, error } = await supabase
+    .from("saved_frames")
+    .select("id, user_id, player_id, image_path, base_image_path, source, metadata, created_at")
+    .eq("user_id", state.user.id)
+    .eq("player_id", state.selectedProjectId)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.warn("Could not load frames from Supabase", error.message);
+    return localFrames;
+  }
+
+  const remoteFrames = (data || []).map(savedFrameFromRow).filter((frame) => frame.image);
+  const remoteIds = new Set(remoteFrames.map((frame) => frame.id));
+  const localOnlyFrames = localFrames.filter((frame) => frame.id && !remoteIds.has(frame.id));
+  if (localOnlyFrames.length) {
+    await Promise.all(localOnlyFrames.map(saveSavedFrameToSupabase));
+  }
+  return [...remoteFrames, ...localOnlyFrames];
+}
+
+function evaluationFromRow(row) {
+  const metadata = row.metadata || {};
+  const evaluation = metadata.evaluation || {};
+  return {
+    id: row.id,
+    project_id: row.player_id,
+    athlete: metadata.athlete || getSelectedProject()?.athlete || "Athlete",
+    created_at: row.created_at,
+    frameCount: metadata.frameCount || 0,
+    demo: Boolean(metadata.demo),
+    result: evaluation.result || evaluation || { issue: row.body || "Evaluation" }
+  };
+}
+
+function evaluationToRow(evaluation) {
+  return {
+    id: evaluation.id,
+    user_id: state.user?.id,
+    player_id: evaluation.project_id || state.selectedProjectId,
+    kind: "evaluation",
+    body: evaluation.result?.issue || "AI evaluation",
+    metadata: {
+      athlete: evaluation.athlete || getSelectedProject()?.athlete || "Athlete",
+      frameCount: evaluation.frameCount || 0,
+      demo: Boolean(evaluation.demo),
+      evaluation: {
+        result: evaluation.result || {}
+      }
+    },
+    created_at: evaluation.created_at || new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+}
+
+async function saveEvaluationToSupabase(evaluation) {
+  if (!supabase || !state.user?.id || !state.selectedProjectId || !evaluation?.id) return;
+  const { error } = await supabase.from("notes").upsert(evaluationToRow(evaluation), { onConflict: "id" });
+  if (error) console.warn("Could not save evaluation to Supabase", error.message);
+}
+
+async function deleteEvaluationFromSupabase(evaluationId) {
+  if (!supabase || !state.user?.id || !evaluationId) return;
+  const { error } = await supabase
+    .from("notes")
+    .delete()
+    .eq("id", evaluationId)
+    .eq("user_id", state.user.id)
+    .eq("kind", "evaluation");
+  if (error) console.warn("Could not delete evaluation from Supabase", error.message);
+}
+
+async function loadEvaluationsFromSupabase(localEvaluations = []) {
+  if (!supabase || !state.user?.id || !state.selectedProjectId) return localEvaluations;
+
+  const { data, error } = await supabase
+    .from("notes")
+    .select("id, user_id, player_id, body, kind, metadata, created_at, updated_at")
+    .eq("user_id", state.user.id)
+    .eq("player_id", state.selectedProjectId)
+    .eq("kind", "evaluation")
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.warn("Could not load evaluations from Supabase", error.message);
+    return localEvaluations;
+  }
+
+  const remoteEvaluations = (data || []).map(evaluationFromRow);
+  const remoteIds = new Set(remoteEvaluations.map((evaluation) => evaluation.id));
+  const localOnlyEvaluations = localEvaluations.filter((evaluation) => evaluation.id && !remoteIds.has(evaluation.id));
+  if (localOnlyEvaluations.length) {
+    await Promise.all(localOnlyEvaluations.map(saveEvaluationToSupabase));
+  }
+  return [...remoteEvaluations, ...localOnlyEvaluations];
+}
+
 function frameBelongsToSelectedProject(frame) {
   const selectedProject = getSelectedProject();
   if (!selectedProject) return false;
@@ -1330,6 +1549,7 @@ function saveAnnotatedFrame() {
     alert("This browser could not store the saved frame. Try deleting older saved frames.");
     return null;
   }
+  saveSavedFrameToSupabase(frame);
   renderSavedFrames();
   return frame;
 }
@@ -1350,6 +1570,7 @@ function persistCurrentFrameEdit() {
   frame.image = annotatedCanvas.toDataURL("image/jpeg", 0.82);
   frame.updated_at = new Date().toISOString();
   persistSavedFrames();
+  saveSavedFrameToSupabase(frame);
   renderSavedFrames();
 }
 
@@ -1358,6 +1579,7 @@ function deleteEditingFrame() {
   if (!frame) return;
   state.savedFrames = state.savedFrames.filter((item) => item.id !== frame.id);
   state.aiCoachFrames = state.aiCoachFrames.filter((item) => item.id !== frame.id);
+  deleteSavedFrameFromSupabase(frame.id);
   state.editingFrameId = null;
   persistSavedFrames();
   renderSavedFrames();
@@ -1463,8 +1685,8 @@ function setVideoView(view) {
   app.classList.toggle("comparing-shell", state.comparing);
   app.classList.toggle("compare-only-shell", isCompareOnly);
   app.classList.toggle("frame-shell", isFrameView);
-  $("#compareBtn").classList.toggle("active", state.comparing);
-  document.querySelector('[data-action="compare"]').classList.toggle("active", state.comparing);
+  $("#compareBtn")?.classList.toggle("active", state.comparing);
+  document.querySelector('[data-action="compare"]')?.classList.toggle("active", state.comparing);
   document.querySelectorAll("[data-video-view]").forEach((button) => {
     button.classList.toggle("selected", button.dataset.videoView === view);
   });
@@ -1556,12 +1778,13 @@ function getAuthPageMode() {
   return document.querySelector("[data-auth-mode].selected")?.dataset.authMode || "signup";
 }
 
-function completeAuth(email) {
+async function completeAuth(email) {
   state.user = {
     id: state.user?.id || crypto.randomUUID(),
     email
   };
   localStorage.setItem("diamondframe.user", JSON.stringify(state.user));
+  await loadProjectsFromSupabase();
   updateAccess();
   setDashboardSection("projects");
   setView("dashboard");
@@ -1598,17 +1821,110 @@ async function submitAuthPage(event) {
       return;
     }
     const user = result.data.user || result.data.session?.user;
-    if (user) completeAuth(user.email || email);
+    if (user) await completeAuth(user.email || email);
     return;
   }
 
-  completeAuth(email);
+  await completeAuth(email);
 }
 
 function persistProjects() {
   localStorage.setItem("diamondframe.projects", JSON.stringify(state.projects));
   if (state.selectedProjectId) localStorage.setItem("diamondframe.selectedProjectId", state.selectedProjectId);
   else localStorage.removeItem("diamondframe.selectedProjectId");
+}
+
+function parseProjectNotesMetadata(notes) {
+  if (!notes) return {};
+  try {
+    const parsed = JSON.parse(notes);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function projectFromPlayer(player) {
+  const metadata = parseProjectNotesMetadata(player.notes);
+  return {
+    id: player.id,
+    athlete: player.name || "Athlete",
+    sport: player.position || metadata.sport || "",
+    age: metadata.age || "",
+    team: metadata.team || "",
+    createdAt: player.created_at || new Date().toISOString()
+  };
+}
+
+function projectToPlayer(project) {
+  return {
+    id: project.id,
+    user_id: state.user?.id,
+    name: project.athlete || "Athlete",
+    position: project.sport || null,
+    notes: JSON.stringify({
+      age: project.age || "",
+      team: project.team || ""
+    })
+  };
+}
+
+async function saveProjectToSupabase(project) {
+  if (!supabase || !state.user?.id || !project?.id) return;
+  const payload = projectToPlayer(project);
+  const { error } = await supabase.from("players").upsert(payload, { onConflict: "id" });
+  if (error) console.warn("Could not save project to Supabase", error.message);
+}
+
+async function deleteProjectFromSupabase(projectId) {
+  if (!supabase || !state.user?.id || !projectId) return;
+  const { error } = await supabase
+    .from("players")
+    .delete()
+    .eq("id", projectId)
+    .eq("user_id", state.user.id);
+  if (error) console.warn("Could not delete project from Supabase", error.message);
+}
+
+async function loadProjectsFromSupabase() {
+  if (!supabase || !state.user?.id) return;
+
+  const localProjects = [...state.projects];
+  const { data, error } = await supabase
+    .from("players")
+    .select("id, name, position, notes, created_at")
+    .eq("user_id", state.user.id)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.warn("Could not load projects from Supabase", error.message);
+    return;
+  }
+
+  const remoteProjects = (data || []).map(projectFromPlayer);
+  const remoteIds = new Set(remoteProjects.map((project) => project.id));
+  const localOnlyProjects = localProjects.filter((project) => project.id && !remoteIds.has(project.id));
+
+  if (localOnlyProjects.length) {
+    await Promise.all(localOnlyProjects.map(saveProjectToSupabase));
+  }
+
+  const merged = [...remoteProjects, ...localOnlyProjects];
+  const seen = new Set();
+  state.projects = merged.filter((project) => {
+    if (!project.id || seen.has(project.id)) return false;
+    seen.add(project.id);
+    return true;
+  });
+  if (!state.selectedProjectId && state.projects.length) {
+    state.selectedProjectId = state.projects[0].id;
+  }
+  if (state.selectedProjectId && !state.projects.some((project) => project.id === state.selectedProjectId)) {
+    state.selectedProjectId = state.projects[0]?.id || null;
+  }
+  persistProjects();
+  renderDashboardProjects();
+  updateProjectChrome();
 }
 
 function getSelectedProject() {
@@ -1623,7 +1939,7 @@ function updateProjectChrome() {
   if (athleteInput) athleteInput.value = selectedProject?.athlete || "";
 }
 
-function selectProject(projectId, { openEditor = false } = {}) {
+async function selectProject(projectId, { openEditor = false } = {}) {
   if (projectId === state.selectedProjectId) {
     if (openEditor) setView("editor");
     return;
@@ -1632,7 +1948,7 @@ function selectProject(projectId, { openEditor = false } = {}) {
   persistCurrentProjectWorkspace();
   state.selectedProjectId = projectId;
   persistProjects();
-  loadProjectWorkspace();
+  await loadProjectWorkspace();
   renderDashboardProjects();
   if (openEditor) setView("editor");
 }
@@ -1683,13 +1999,16 @@ function resetEditorSurface() {
   });
 }
 
-function loadProjectWorkspace({ resetSurface = true } = {}) {
+async function loadProjectWorkspace({ resetSurface = true } = {}) {
   if (resetSurface) resetEditorSurface();
   const storedFrames = readProjectJson("frames", []);
-  state.savedFrames = storedFrames.filter(frameBelongsToSelectedProject);
+  const localFrames = storedFrames.filter(frameBelongsToSelectedProject);
+  state.savedFrames = await loadSavedFramesFromSupabase(localFrames);
   if (state.savedFrames.length !== storedFrames.length) persistSavedFrames();
   state.projectNotes = readProjectNotes();
-  state.evaluations = readProjectJson("evaluations", []).filter((evaluation) => !evaluation.project_id || evaluation.project_id === state.selectedProjectId);
+  const localEvaluations = readProjectJson("evaluations", []).filter((evaluation) => !evaluation.project_id || evaluation.project_id === state.selectedProjectId);
+  state.evaluations = await loadEvaluationsFromSupabase(localEvaluations);
+  persistEvaluations();
   const notesInput = $("#notesInput");
   if (notesInput) notesInput.value = "";
   renderLibraryMedia();
@@ -1753,13 +2072,14 @@ function renderDashboardProjects() {
   });
 }
 
-function removeProject(projectId) {
+async function removeProject(projectId) {
   if (state.selectedProjectId === projectId) persistCurrentProjectWorkspace();
   state.projects = state.projects.filter((project) => project.id !== projectId);
+  await deleteProjectFromSupabase(projectId);
   if (state.selectedProjectId === projectId) {
     state.selectedProjectId = state.projects[0]?.id || null;
     persistProjects();
-    loadProjectWorkspace();
+    await loadProjectWorkspace();
   } else {
     persistProjects();
   }
@@ -1776,7 +2096,7 @@ function openNewProjectDialog() {
   $("#projectAthleteInput")?.focus();
 }
 
-function submitNewProject(event) {
+async function submitNewProject(event) {
   event.preventDefault();
   const formData = new FormData(event.currentTarget);
   const athlete = String(formData.get("athlete") || "").trim();
@@ -1794,9 +2114,10 @@ function submitNewProject(event) {
   state.projects.unshift(project);
   persistCurrentProjectWorkspace();
   persistProjects();
+  await saveProjectToSupabase(project);
   state.selectedProjectId = project.id;
   persistProjects();
-  loadProjectWorkspace();
+  await loadProjectWorkspace();
   renderDashboardProjects();
   $("#newProjectDialog")?.close();
   setView("editor");
@@ -1937,6 +2258,8 @@ async function loadSupabaseSession() {
     .eq("id", data.session.user.id)
     .single();
   state.subscription = profile?.subscription_status === "active" ? "pro" : "free";
+  await loadProjectsFromSupabase();
+  await loadProjectWorkspace({ resetSurface: false });
   updateAccess();
 }
 
@@ -2030,20 +2353,20 @@ fileA.addEventListener("change", () => {
 });
 $("#uploadBtn").addEventListener("click", () => fileA.click());
 $("#emptyB").addEventListener("click", () => setVideoView("compare"));
-document.querySelector('[data-action="compare"]').addEventListener("click", () => setCompareMode());
-$("#compareBtn").addEventListener("click", () => setCompareMode());
+document.querySelector('[data-action="compare"]')?.addEventListener("click", () => setCompareMode());
+$("#compareBtn")?.addEventListener("click", () => setCompareMode());
 document.querySelectorAll("[data-video-view]").forEach((button) => {
   button.addEventListener("click", () => setVideoView(button.dataset.videoView));
 });
 setupPaneDropTarget($(".primary-pane"), "original");
 setupPaneDropTarget($("#comparePane"), "comparison");
-$("#annotateBtn").addEventListener("click", captureFrame);
+$("#annotateBtn")?.addEventListener("click", captureFrame);
 $("#saveFrameBtn")?.addEventListener("click", saveAnnotatedFrame);
 $("#panelSaveFrameBtn").addEventListener("click", saveAnnotatedFrame);
 document.querySelectorAll("[data-edit-tool]").forEach((button) => {
   button.addEventListener("click", () => setEditTool(button.dataset.editTool));
 });
-$("#muteAudioBtn").addEventListener("click", toggleSelectedAudioMute);
+$("#muteAudioBtn")?.addEventListener("click", toggleSelectedAudioMute);
 $("#inspectorSaveFrameBtn").addEventListener("click", () => {
   saveAnnotatedFrame();
   renderAiCoachFrames();
@@ -2191,6 +2514,7 @@ $("#mechanicsNoteDeleteBtn")?.addEventListener("click", deleteEditingMechanicsNo
 $("#savedFrameSaveBtn")?.addEventListener("click", () => persistCurrentFrameEdit());
 $("#savedFrameDeleteBtn")?.addEventListener("click", deleteEditingFrame);
 $("#evaluationDeleteBtn")?.addEventListener("click", deleteEditingEvaluation);
+$("#evaluationExportBtn")?.addEventListener("click", exportEvaluationPdf);
 $("#evaluationDialog")?.addEventListener("close", () => {
   state.editingEvaluationId = null;
 });
@@ -2213,6 +2537,7 @@ $("#authForm").addEventListener("submit", async (event) => {
     const user = result.data.user || result.data.session?.user;
     state.user = { id: user.id, email: user.email };
     localStorage.setItem("diamondframe.user", JSON.stringify(state.user));
+    await loadProjectsFromSupabase();
     $("#authDialog").close();
     updateAccess();
     return;
@@ -2223,6 +2548,7 @@ $("#authForm").addEventListener("submit", async (event) => {
     email
   };
   localStorage.setItem("diamondframe.user", JSON.stringify(state.user));
+  await loadProjectsFromSupabase();
   $("#authDialog").close();
   updateAccess();
 });
