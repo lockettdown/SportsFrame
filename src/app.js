@@ -43,6 +43,7 @@ const state = {
   subscription: localStorage.getItem("diamondframe.subscription") || "free",
   captured: false,
   comparing: false,
+  pendingDeleteProjectId: null,
   videoView: "primary"
 };
 
@@ -2113,10 +2114,28 @@ function renderDashboardProjects() {
     openButton.addEventListener("click", () => {
       selectProject(project.id, { openEditor: true });
     });
-    deleteButton.addEventListener("click", () => removeProject(project.id));
+    deleteButton.addEventListener("click", () => openDeleteProjectDialog(project.id));
 
     projectList.append(row);
   });
+}
+
+function openDeleteProjectDialog(projectId) {
+  const project = state.projects.find((item) => item.id === projectId);
+  if (!project) return;
+  state.pendingDeleteProjectId = projectId;
+  const copy = $("#deleteProjectCopy");
+  if (copy) copy.textContent = `Delete "${project.athlete}"? This project will be permanently deleted.`;
+  $("#deleteProjectDialog")?.showModal();
+}
+
+async function confirmProjectDelete(event) {
+  event.preventDefault();
+  const projectId = state.pendingDeleteProjectId;
+  if (!projectId) return;
+  state.pendingDeleteProjectId = null;
+  $("#deleteProjectDialog")?.close();
+  await removeProject(projectId);
 }
 
 async function removeProject(projectId) {
@@ -2528,6 +2547,10 @@ $("#editorNavBtn").addEventListener("click", () => setView("editor"));
 $("#dashboardNavBtn").addEventListener("click", () => setView("dashboard"));
 $("#newProjectBtn")?.addEventListener("click", openNewProjectDialog);
 $("#newProjectForm")?.addEventListener("submit", submitNewProject);
+$("#deleteProjectForm")?.addEventListener("submit", confirmProjectDelete);
+$("#deleteProjectDialog")?.addEventListener("close", () => {
+  state.pendingDeleteProjectId = null;
+});
 document.querySelectorAll("[data-dashboard-target]").forEach((button) => {
   button.setAttribute("aria-pressed", String(button.classList.contains("selected")));
   button.addEventListener("click", () => setDashboardSection(button.dataset.dashboardTarget));
