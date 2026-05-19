@@ -1368,16 +1368,10 @@ async function loadSavedFramesFromSupabase(localFrames = []) {
 
   if (error) {
     console.warn("Could not load frames from Supabase", error.message);
-    return localFrames;
+    return [];
   }
 
-  const remoteFrames = (data || []).map(savedFrameFromRow).filter((frame) => frame.image);
-  const remoteIds = new Set(remoteFrames.map((frame) => frame.id));
-  const localOnlyFrames = localFrames.filter((frame) => frame.id && !remoteIds.has(frame.id));
-  if (localOnlyFrames.length) {
-    await Promise.all(localOnlyFrames.map(saveSavedFrameToSupabase));
-  }
-  return [...remoteFrames, ...localOnlyFrames];
+  return (data || []).map(savedFrameFromRow).filter((frame) => frame.image);
 }
 
 function evaluationFromRow(row) {
@@ -1445,7 +1439,7 @@ async function loadEvaluationsFromSupabase(localEvaluations = []) {
 
   if (error) {
     console.warn("Could not load evaluations from Supabase", error.message);
-    return localEvaluations;
+    return [];
   }
 
   const staleEvaluationIds = [];
@@ -1455,14 +1449,7 @@ async function loadEvaluationsFromSupabase(localEvaluations = []) {
     return evaluation;
   }).filter(Boolean);
   staleEvaluationIds.forEach((id) => deleteEvaluationFromSupabase(id));
-  const remoteIds = new Set(remoteEvaluations.map((evaluation) => evaluation.id));
-  const localOnlyEvaluations = localEvaluations.filter((evaluation) => (
-    evaluation.id && !remoteIds.has(evaluation.id) && !isConnectionFallbackEvaluation(evaluation)
-  ));
-  if (localOnlyEvaluations.length) {
-    await Promise.all(localOnlyEvaluations.map(saveEvaluationToSupabase));
-  }
-  return [...remoteEvaluations, ...localOnlyEvaluations];
+  return remoteEvaluations;
 }
 
 function frameBelongsToSelectedProject(frame) {
@@ -1841,7 +1828,11 @@ async function submitAuthPage(event) {
       if (message) message.textContent = result.error.message;
       return;
     }
-    const user = result.data.user || result.data.session?.user;
+    if (!result.data.session) {
+      if (message) message.textContent = "Check your email to confirm the account, then log in.";
+      return;
+    }
+    const user = result.data.session.user || result.data.user;
     if (user) await completeAuth(user, email);
     return;
   }
@@ -1937,7 +1928,6 @@ async function deleteProjectFromSupabase(projectId) {
 async function loadProjectsFromSupabase() {
   if (!supabase || !state.user?.id) return;
 
-  const localProjects = [...state.projects];
   const { data, error } = await supabase
     .from("players")
     .select("id, name, position, notes, created_at")
@@ -1946,20 +1936,17 @@ async function loadProjectsFromSupabase() {
 
   if (error) {
     console.warn("Could not load projects from Supabase", error.message);
+    state.projects = [];
+    state.selectedProjectId = null;
+    persistProjects();
+    renderDashboardProjects();
+    updateProjectChrome();
     return;
   }
 
   const remoteProjects = (data || []).map(projectFromPlayer);
-  const remoteIds = new Set(remoteProjects.map((project) => project.id));
-  const localOnlyProjects = localProjects.filter((project) => project.id && !remoteIds.has(project.id));
-
-  if (localOnlyProjects.length) {
-    await Promise.all(localOnlyProjects.map(saveProjectToSupabase));
-  }
-
-  const merged = [...remoteProjects, ...localOnlyProjects];
   const seen = new Set();
-  state.projects = merged.filter((project) => {
+  state.projects = remoteProjects.filter((project) => {
     if (!project.id || seen.has(project.id)) return false;
     seen.add(project.id);
     return true;
@@ -2610,7 +2597,11 @@ $("#authForm").addEventListener("submit", async (event) => {
       alert(result.error.message);
       return;
     }
-    const user = result.data.user || result.data.session?.user;
+    if (!result.data.session) {
+      alert("Check your email to confirm the account, then log in.");
+      return;
+    }
+    const user = result.data.session.user || result.data.user;
     await completeAuth(user, email);
     $("#authDialog").close();
     return;
