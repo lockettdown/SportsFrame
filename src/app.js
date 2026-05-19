@@ -36,10 +36,10 @@ const state = {
   editingNoteId: null,
   evaluations: [],
   editingEvaluationId: null,
-  projects: JSON.parse(localStorage.getItem("diamondframe.projects") || "[]"),
-  selectedProjectId: localStorage.getItem("diamondframe.selectedProjectId") || null,
+  projects: [],
+  selectedProjectId: null,
   savedFrames: [],
-  user: JSON.parse(localStorage.getItem("diamondframe.user") || "null"),
+  user: null,
   subscription: localStorage.getItem("diamondframe.subscription") || "free",
   captured: false,
   comparing: false,
@@ -2297,29 +2297,24 @@ async function getAccessToken() {
   return data.session?.access_token || null;
 }
 
-async function loadSupabaseSession() {
-  if (!supabase) return false;
-  const { data, error } = await supabase.auth.getUser();
-  if (error || !data.user) {
-    state.user = null;
-    localStorage.removeItem("diamondframe.user");
-    return false;
-  }
-  state.user = {
-    id: data.user.id,
-    email: data.user.email
-  };
-  localStorage.setItem("diamondframe.user", JSON.stringify(state.user));
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("subscription_status")
-    .eq("id", data.user.id)
-    .single();
-  state.subscription = profile?.subscription_status === "active" ? "pro" : "free";
-  await loadProjectsFromSupabase();
-  await loadProjectWorkspace({ resetSurface: false });
+async function requireFreshLogin() {
+  if (supabase) await supabase.auth.signOut();
+  state.user = null;
+  state.subscription = "free";
+  state.projects = [];
+  state.selectedProjectId = null;
+  state.savedFrames = [];
+  state.evaluations = [];
+  state.projectNotes = [];
+  localStorage.removeItem("diamondframe.user");
+  localStorage.removeItem("diamondframe.selectedProjectId");
+  localStorage.removeItem("diamondframe.projects");
+  setAuthPageMode("login");
+  setDashboardSection("projects");
+  setView("dashboard");
+  renderDashboardProjects();
+  updateProjectChrome();
   updateAccess();
-  return true;
 }
 
 document.querySelectorAll("[data-tool]").forEach((button) => {
@@ -2618,13 +2613,7 @@ window.addEventListener("resize", () => {
 });
 
 async function initializeApp() {
-  if (state.selectedProjectId && !getSelectedProject()) state.selectedProjectId = null;
-  const loadedRemoteSession = await loadSupabaseSession();
-  if (!loadedRemoteSession) {
-    await loadProjectWorkspace({ resetSurface: false });
-    renderDashboardProjects();
-    updateAccess();
-  }
+  await requireFreshLogin();
   resizeCanvases();
 }
 
