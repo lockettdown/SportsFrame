@@ -1,8 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
+const supabaseBrowserKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabase = supabaseUrl && supabaseBrowserKey ? createClient(supabaseUrl, supabaseBrowserKey) : null;
 
 const state = {
   tool: "draw",
@@ -2290,23 +2290,28 @@ async function getAccessToken() {
 }
 
 async function loadSupabaseSession() {
-  if (!supabase) return;
-  const { data } = await supabase.auth.getSession();
-  if (!data.session) return;
+  if (!supabase) return false;
+  const { data, error } = await supabase.auth.getUser();
+  if (error || !data.user) {
+    state.user = null;
+    localStorage.removeItem("diamondframe.user");
+    return false;
+  }
   state.user = {
-    id: data.session.user.id,
-    email: data.session.user.email
+    id: data.user.id,
+    email: data.user.email
   };
   localStorage.setItem("diamondframe.user", JSON.stringify(state.user));
   const { data: profile } = await supabase
     .from("profiles")
     .select("subscription_status")
-    .eq("id", data.session.user.id)
+    .eq("id", data.user.id)
     .single();
   state.subscription = profile?.subscription_status === "active" ? "pro" : "free";
   await loadProjectsFromSupabase();
   await loadProjectWorkspace({ resetSurface: false });
   updateAccess();
+  return true;
 }
 
 document.querySelectorAll("[data-tool]").forEach((button) => {
@@ -2595,9 +2600,16 @@ window.addEventListener("resize", () => {
   applySavedLayoutDimensions();
   resizeCanvases();
 });
-if (state.selectedProjectId && !getSelectedProject()) state.selectedProjectId = null;
-loadProjectWorkspace({ resetSurface: false });
-resizeCanvases();
-renderDashboardProjects();
-updateAccess();
-loadSupabaseSession();
+
+async function initializeApp() {
+  if (state.selectedProjectId && !getSelectedProject()) state.selectedProjectId = null;
+  const loadedRemoteSession = await loadSupabaseSession();
+  if (!loadedRemoteSession) {
+    await loadProjectWorkspace({ resetSurface: false });
+    renderDashboardProjects();
+    updateAccess();
+  }
+  resizeCanvases();
+}
+
+initializeApp();
