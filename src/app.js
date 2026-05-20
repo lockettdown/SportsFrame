@@ -38,13 +38,20 @@ const state = {
   editingEvaluationId: null,
   projects: [],
   selectedProjectId: null,
+  workspaceProjectId: null,
   savedFrames: [],
   user: null,
   subscription: localStorage.getItem("diamondframe.subscription") || "free",
   captured: false,
   comparing: false,
   pendingDeleteProjectId: null,
-  videoView: "primary"
+  videoView: "primary",
+  primaryMediaId: null,
+  compareMediaId: null,
+  sessionAutoSaveTimer: null,
+  sessionSaveInFlight: false,
+  sessionSaveQueued: false,
+  restoringProject: false
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -75,8 +82,84 @@ const layoutStorageKeys = {
   libraryWidth: "diamondframe.layout.libraryWidth"
 };
 
+const storageBuckets = {
+  videos: "videos",
+  savedFrames: "saved-frames"
+};
+
+const signedUrlLifetimeSeconds = 60 * 60 * 24;
+
 function clampNumber(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function cloneJson(value, fallback = null) {
+  try {
+    return structuredClone(value);
+  } catch {
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch {
+      return fallback;
+    }
+  }
+}
+
+function isRemoteUrl(value) {
+  return /^https?:\/\//i.test(value || "") || /^blob:/i.test(value || "");
+}
+
+function isDataUrl(value) {
+  return /^data:/i.test(value || "");
+}
+
+function sanitizeStorageFilename(name = "upload") {
+  const cleaned = String(name)
+    .trim()
+    .replace(/[^a-z0-9._-]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+  return cleaned || "upload";
+}
+
+async function getSignedStorageUrl(bucket, path) {
+  if (!path || isDataUrl(path) || isRemoteUrl(path) || !supabase) return path;
+  const { data, error } = await supabase.storage
+    .from(bucket)
+    .createSignedUrl(path, signedUrlLifetimeSeconds);
+  if (error) {
+    console.warn(`Could not sign ${bucket} asset`, error.message);
+    return path;
+  }
+  return data?.signedUrl || path;
+}
+
+async function uploadDataUrlToStorage(bucket, path, dataUrl) {
+  if (!supabase || !state.user?.id || !isDataUrl(dataUrl)) return dataUrl;
+  const blob = await fetch(dataUrl).then((response) => response.blob());
+  const { error } = await supabase.storage
+    .from(bucket)
+    .upload(path, blob, {
+      cacheControl: "3600",
+      contentType: blob.type || "image/jpeg",
+      upsert: true
+    });
+  if (error) throw error;
+  return path;
+}
+
+function getMediaName(media) {
+  return media?.name || media?.file?.name || "Imported media";
+}
+
+function getMediaMimeType(media) {
+  return media?.mimeType || media?.file?.type || "";
+}
+
+function getMediaSourceUrl(media) {
+  if (!media) return "";
+  if (media.url) return media.url;
+  return media.file ? URL.createObjectURL(media.file) : "";
 }
 
 function getLayoutBounds(type) {
@@ -234,8 +317,10 @@ function formatTime(seconds = 0) {
   return `${mins}:${secs}.${hundredths}`;
 }
 
-function loadVideo(file, video, emptyEl) {
-  if (!file) return;
+function loadVideo(media, video, emptyEl, options = {}) {
+  if (!media) return;
+  const sourceUrl = getMediaSourceUrl(media);
+  if (!sourceUrl) return;
   const isPrimaryVideo = video === videoA;
   if (isPrimaryVideo) {
     state.stillImage = null;
@@ -250,19 +335,21 @@ function loadVideo(file, video, emptyEl) {
   }
   video.style.visibility = "visible";
   video.closest(".video-pane")?.classList.add("loaded");
-  video.src = URL.createObjectURL(file);
+  video.src = sourceUrl;
   video.load();
   emptyEl.hidden = true;
   video.addEventListener("loadedmetadata", async () => {
     updateTimeline(video, video === videoA ? $("#timelineA") : $("#timelineB"));
-    if (isPrimaryVideo) updateTimelineTracks(file, "video", video.duration);
+    if (isPrimaryVideo && !options.skipTimelineUpdate) updateTimelineTracks(media, "video", video.duration);
     if (isPrimaryVideo) await generateFrameStrip(video);
     else await generateCompareFrameStrip(video);
   }, { once: true });
 }
 
-function loadImage(file, emptyEl) {
-  if (!file) return;
+function loadImage(media, emptyEl, options = {}) {
+  if (!media) return;
+  const sourceUrl = getMediaSourceUrl(media);
+  if (!sourceUrl) return;
   const image = new Image();
   image.addEventListener("load", () => {
     state.stillImage = image;
@@ -275,52 +362,143 @@ function loadImage(file, emptyEl) {
     $("#timelineA").value = 0;
     $("#timeA").textContent = formatTime(0);
     clearFrameStrip("Still image loaded");
+    if (!options.skipTimelineUpdate) updateTimelineTracks(media, "image", 0);
     emptyEl.hidden = true;
     const rect = captureCanvas.getBoundingClientRect();
     captureCtx.clearRect(0, 0, rect.width, rect.height);
     drawContainedImage(captureCtx, image, rect.width, rect.height);
     redraw();
   }, { once: true });
-  image.src = URL.createObjectURL(file);
+  image.src = sourceUrl;
 }
 
-function loadMedia(file, video, emptyEl) {
-  if (!file) return;
-  if (file.type.startsWith("image/") && video === videoA) {
-    loadImage(file, emptyEl);
-    updateTimelineTracks(file, "image", 0);
+function loadMedia(media, video, emptyEl, options = {}) {
+  if (!media) return;
+  if (getMediaMimeType(media).startsWith("image/") && video === videoA) {
+    loadImage(media, emptyEl, options);
     return;
   }
-  loadVideo(file, video, emptyEl);
+  loadVideo(media, video, emptyEl, options);
 }
 
-function importMediaFile(file) {
+async function importMediaFile(file) {
   if (!file) return;
   const media = {
     id: crypto.randomUUID(),
     projectId: state.selectedProjectId,
     file,
-    kind: file.type.startsWith("image/") ? "Image" : "Video"
+    name: file.name,
+    mimeType: file.type,
+    kind: file.type.startsWith("image/") ? "Image" : "Video",
+    uploading: Boolean(supabase && state.user?.id)
   };
   state.libraryMedia.unshift(media);
   renderLibraryMedia();
+  if (supabase && state.user?.id) {
+    const saved = await saveImportedMediaToSupabase(media);
+    if (!saved) {
+      state.libraryMedia = state.libraryMedia.filter((item) => item.id !== media.id);
+      renderLibraryMedia();
+      alert("This media could not sync to your account. Please try uploading it again.");
+      return;
+    }
+  }
+  media.uploading = false;
+  renderLibraryMedia();
+  scheduleProjectSessionAutosave();
+}
+
+async function saveImportedMediaToSupabase(media) {
+  if (!supabase || !state.user?.id || !state.selectedProjectId || !media?.file) return false;
+  const filename = sanitizeStorageFilename(media.file.name);
+  const storagePath = `${state.user.id}/${state.selectedProjectId}/media/${media.id}-${filename}`;
+  const { error: uploadError } = await supabase.storage
+    .from(storageBuckets.videos)
+    .upload(storagePath, media.file, {
+      cacheControl: "3600",
+      contentType: media.file.type || "application/octet-stream",
+      upsert: true
+    });
+  if (uploadError) {
+    console.warn("Could not upload media to Supabase Storage", uploadError.message);
+    return false;
+  }
+
+  const payload = {
+    id: media.id,
+    user_id: state.user.id,
+    player_id: state.selectedProjectId,
+    storage_path: storagePath,
+    original_filename: media.file.name || "Imported media",
+    drill_type: "hitting",
+    source: "library",
+    mime_type: media.file.type || null,
+    metadata: {
+      kind: media.kind,
+      uploaded_at: new Date().toISOString()
+    }
+  };
+  const { error: rowError } = await supabase
+    .from("videos")
+    .upsert(payload, { onConflict: "id" });
+  if (rowError) {
+    console.warn("Could not save media record to Supabase", rowError.message);
+    return false;
+  }
+
+  media.storagePath = storagePath;
+  media.url = await getSignedStorageUrl(storageBuckets.videos, storagePath);
+  return true;
+}
+
+async function loadProjectMediaFromSupabase(localMedia = []) {
+  if (!supabase || !state.user?.id || !state.selectedProjectId) return localMedia;
+
+  const { data, error } = await supabase
+    .from("videos")
+    .select("id, player_id, storage_path, original_filename, source, mime_type, metadata, created_at")
+    .eq("user_id", state.user.id)
+    .eq("player_id", state.selectedProjectId)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.warn("Could not load project media from Supabase", error.message);
+    return [];
+  }
+
+  return Promise.all((data || []).map(async (row) => ({
+    id: row.id,
+    projectId: row.player_id,
+    storagePath: row.storage_path,
+    name: row.original_filename || "Imported media",
+    mimeType: row.mime_type || "",
+    kind: row.metadata?.kind || ((row.mime_type || "").startsWith("image/") ? "Image" : "Video"),
+    source: row.source || "library",
+    createdAt: row.created_at,
+    url: await getSignedStorageUrl(storageBuckets.videos, row.storage_path)
+  })));
 }
 
 function getLibraryMedia(id) {
   return state.libraryMedia.find((media) => media.id === id && media.projectId === state.selectedProjectId);
 }
 
-function assignMediaToPane(media, pane) {
+function assignMediaToPane(media, pane, options = {}) {
   if (!media) return;
-  if (pane === "comparison" && !media.file.type.startsWith("video/")) {
+  if (pane === "comparison" && !getMediaMimeType(media).startsWith("video/")) {
     alert("Comparison supports video files. Drag a video from the Library into this window.");
     return;
   }
   const isComparison = pane === "comparison";
-  loadMedia(media.file, isComparison ? videoB : videoA, $(isComparison ? "#emptyB" : "#emptyA"));
+  if (isComparison) state.compareMediaId = media.id;
+  else state.primaryMediaId = media.id;
+  loadMedia(media, isComparison ? videoB : videoA, $(isComparison ? "#emptyB" : "#emptyA"), {
+    skipTimelineUpdate: Boolean(options.restoreSession)
+  });
   document.querySelectorAll(".media-item").forEach((item) => {
     item.classList.toggle("active", item.dataset.mediaId === media.id);
   });
+  if (!options.skipAutosave) scheduleProjectSessionAutosave();
 }
 
 function updateTimeline(video, range) {
@@ -957,15 +1135,15 @@ function addImportedMediaItem(media, isActive = false) {
   item.type = "button";
   item.draggable = true;
   item.dataset.mediaId = media.id;
-  item.setAttribute("aria-label", `Drag ${media.file.name} into a video window`);
+  item.setAttribute("aria-label", `Drag ${getMediaName(media)} into a video window`);
   const thumb = document.createElement("span");
   thumb.className = "media-thumb imported";
   const copy = document.createElement("span");
   copy.className = "media-copy";
   const title = document.createElement("strong");
-  title.textContent = media.file.name;
+  title.textContent = getMediaName(media);
   const meta = document.createElement("small");
-  meta.textContent = `${media.kind} · Drag to a window`;
+  meta.textContent = `${media.kind}${media.uploading ? " · Syncing..." : " · Drag to a window"}`;
   copy.append(title, meta);
   item.append(thumb, copy);
   item.addEventListener("click", () => {
@@ -985,7 +1163,7 @@ function updateTimelineTracks(file, kind, duration = 0) {
   state.audioMuted = false;
   state.timelineSegments = [{
     id: segmentId,
-    name: file.name || (kind === "image" ? "Image" : "Video"),
+    name: getMediaName(file) || (kind === "image" ? "Image" : "Video"),
     kind,
     start: 4,
     width,
@@ -1048,6 +1226,7 @@ function setupTimelineSegment(element, segment) {
 function selectTimelineSegment(segmentId) {
   state.selectedSegmentId = segmentId;
   renderTimelineTracks();
+  scheduleProjectSessionAutosave();
 }
 
 function sliceTimelineSegmentAtPointer(segment, event, element) {
@@ -1076,6 +1255,7 @@ function sliceTimelineSegmentAtPointer(segment, event, element) {
   state.timelineSegments.splice(segmentIndex, 1, firstSegment, secondSegment);
   state.selectedSegmentId = secondSegment.id;
   renderTimelineTracks();
+  scheduleProjectSessionAutosave();
 }
 
 function beginTimelineDrag(segmentId, event) {
@@ -1105,6 +1285,7 @@ function beginTimelineDrag(segmentId, event) {
     window.removeEventListener("pointermove", moveSegment);
     window.removeEventListener("pointerup", stopMove);
     window.removeEventListener("pointercancel", stopMove);
+    scheduleProjectSessionAutosave();
   }
 
   window.addEventListener("pointermove", moveSegment);
@@ -1133,6 +1314,7 @@ function toggleSelectedAudioMute() {
     state.audioMuted = !state.audioMuted;
   }
   renderTimelineTracks();
+  scheduleProjectSessionAutosave();
 }
 
 function getPoint(event, canvas = annotationCanvas) {
@@ -1299,8 +1481,10 @@ function readProjectJson(name, fallback = []) {
   }
 }
 
-function savedFrameFromRow(row) {
+async function savedFrameFromRow(row) {
   const metadata = row.metadata || {};
+  const image = await getSignedStorageUrl(storageBuckets.savedFrames, row.image_path);
+  const baseImage = await getSignedStorageUrl(storageBuckets.savedFrames, row.base_image_path || row.image_path);
   return {
     id: row.id,
     user_id: row.user_id,
@@ -1311,8 +1495,10 @@ function savedFrameFromRow(row) {
     created_at: row.created_at,
     updated_at: metadata.updated_at,
     source: row.source || "Original",
-    image: row.image_path,
-    baseImage: row.base_image_path || row.image_path,
+    image,
+    baseImage,
+    imagePath: row.image_path,
+    baseImagePath: row.base_image_path || row.image_path,
     annotations: Array.isArray(metadata.annotations) ? metadata.annotations : []
   };
 }
@@ -1323,8 +1509,8 @@ function savedFrameToRow(frame) {
     user_id: state.user?.id,
     player_id: frame.project_id || state.selectedProjectId,
     frame_time_seconds: Number(frame.time || 0),
-    image_path: frame.image,
-    base_image_path: frame.baseImage || null,
+    image_path: frame.imagePath || frame.image,
+    base_image_path: frame.baseImagePath || frame.baseImage || null,
     source: frame.source || "Original",
     metadata: {
       athlete: frame.athlete || getSelectedProject()?.athlete || "Athlete",
@@ -1339,11 +1525,34 @@ function savedFrameToRow(frame) {
 
 async function saveSavedFrameToSupabase(frame) {
   if (!supabase || !state.user?.id || !state.selectedProjectId || !frame?.image) return false;
-  const { error } = await supabase.from("saved_frames").upsert(savedFrameToRow(frame), { onConflict: "id" });
+  const storageFrame = { ...frame };
+  try {
+    storageFrame.imagePath = isDataUrl(frame.image)
+      ? await uploadDataUrlToStorage(
+        storageBuckets.savedFrames,
+        `${state.user.id}/${state.selectedProjectId}/frames/${frame.id}-annotated.jpg`,
+        frame.image
+      )
+      : frame.imagePath || frame.image;
+    storageFrame.baseImagePath = frame.baseImage && isDataUrl(frame.baseImage)
+      ? await uploadDataUrlToStorage(
+        storageBuckets.savedFrames,
+        `${state.user.id}/${state.selectedProjectId}/frames/${frame.id}-base.jpg`,
+        frame.baseImage
+      )
+      : frame.baseImagePath || frame.baseImage || null;
+  } catch (error) {
+    console.warn("Could not upload saved frame image to Supabase Storage", error.message);
+    return false;
+  }
+
+  const { error } = await supabase.from("saved_frames").upsert(savedFrameToRow(storageFrame), { onConflict: "id" });
   if (error) {
     console.warn("Could not save frame to Supabase", error.message);
     return false;
   }
+  frame.imagePath = storageFrame.imagePath;
+  frame.baseImagePath = storageFrame.baseImagePath;
   return true;
 }
 
@@ -1372,7 +1581,8 @@ async function loadSavedFramesFromSupabase(localFrames = []) {
     return [];
   }
 
-  return (data || []).map(savedFrameFromRow).filter((frame) => frame.image);
+  const frames = await Promise.all((data || []).map(savedFrameFromRow));
+  return frames.filter((frame) => frame.image);
 }
 
 function evaluationFromRow(row) {
@@ -1462,6 +1672,7 @@ function frameBelongsToSelectedProject(frame) {
 
 function persistProjectNotes() {
   localStorage.setItem(getProjectStorageKey("notes"), JSON.stringify(state.projectNotes));
+  scheduleProjectSessionAutosave();
 }
 
 function readProjectNotes() {
@@ -1543,6 +1754,7 @@ function persistCurrentProjectWorkspace() {
   persistProjectNotes();
   persistSavedFrames();
   persistEvaluations();
+  saveCurrentProjectSession();
 }
 
 async function saveAnnotatedFrame() {
@@ -1576,6 +1788,7 @@ async function saveAnnotatedFrame() {
       return null;
     }
     persistSavedFrames();
+    scheduleProjectSessionAutosave();
     return frame;
   }
 
@@ -1585,6 +1798,7 @@ async function saveAnnotatedFrame() {
     alert("This browser could not store the saved frame. Try deleting older saved frames.");
     return null;
   }
+  scheduleProjectSessionAutosave();
   return frame;
 }
 
@@ -1606,6 +1820,7 @@ function persistCurrentFrameEdit() {
   persistSavedFrames();
   saveSavedFrameToSupabase(frame);
   renderSavedFrames();
+  scheduleProjectSessionAutosave();
 }
 
 function deleteEditingFrame() {
@@ -1624,6 +1839,7 @@ function deleteEditingFrame() {
   $("#framePane").classList.remove("loaded");
   frameCaptureCtx.clearRect(0, 0, frameCaptureCanvas.width, frameCaptureCanvas.height);
   frameAnnotationCtx.clearRect(0, 0, frameAnnotationCanvas.width, frameAnnotationCanvas.height);
+  scheduleProjectSessionAutosave();
 }
 
 function saveComparisonFrame() {
@@ -1726,6 +1942,7 @@ function setVideoView(view) {
   });
 
   requestAnimationFrame(resizeCanvases);
+  scheduleProjectSessionAutosave();
 }
 
 function setCompareMode(force = !state.comparing) {
@@ -1897,6 +2114,92 @@ function parseProjectNotesMetadata(notes) {
   }
 }
 
+function getCurrentProjectSessionState() {
+  return {
+    version: 1,
+    primaryMediaId: state.primaryMediaId,
+    compareMediaId: state.compareMediaId,
+    videoView: state.videoView,
+    drawingTarget: state.drawingTarget,
+    currentMediaKind: state.currentMediaKind,
+    tool: state.tool,
+    color: state.color,
+    width: state.width,
+    annotations: cloneJson(state.annotations, []),
+    compareAnnotations: cloneJson(state.compareAnnotations, []),
+    frameAnnotations: cloneJson(state.frameAnnotations, []),
+    timelineSegments: cloneJson(state.timelineSegments, []),
+    selectedSegmentId: state.selectedSegmentId,
+    audioMuted: state.audioMuted,
+    projectNotes: cloneJson(state.projectNotes, []),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function applyProjectSessionState(sessionState = {}) {
+  state.restoringProject = true;
+  state.primaryMediaId = sessionState.primaryMediaId || null;
+  state.compareMediaId = sessionState.compareMediaId || null;
+  state.currentMediaKind = sessionState.currentMediaKind || null;
+  state.drawingTarget = sessionState.drawingTarget || "original";
+  state.tool = sessionState.tool || state.tool;
+  state.color = sessionState.color || state.color;
+  state.width = Number(sessionState.width || state.width);
+  state.annotations = Array.isArray(sessionState.annotations) ? cloneJson(sessionState.annotations, []) : [];
+  state.compareAnnotations = Array.isArray(sessionState.compareAnnotations) ? cloneJson(sessionState.compareAnnotations, []) : [];
+  state.frameAnnotations = Array.isArray(sessionState.frameAnnotations) ? cloneJson(sessionState.frameAnnotations, []) : [];
+  state.timelineSegments = Array.isArray(sessionState.timelineSegments) ? cloneJson(sessionState.timelineSegments, []) : [];
+  state.selectedSegmentId = sessionState.selectedSegmentId || state.timelineSegments[0]?.id || null;
+  state.audioMuted = Boolean(sessionState.audioMuted);
+  state.projectNotes = Array.isArray(sessionState.projectNotes)
+    ? cloneJson(sessionState.projectNotes, [])
+    : readProjectNotes();
+
+  const primaryMedia = state.primaryMediaId ? getLibraryMedia(state.primaryMediaId) : null;
+  const compareMedia = state.compareMediaId ? getLibraryMedia(state.compareMediaId) : null;
+  if (primaryMedia) assignMediaToPane(primaryMedia, "original", { skipAutosave: true, restoreSession: true });
+  if (compareMedia) assignMediaToPane(compareMedia, "comparison", { skipAutosave: true, restoreSession: true });
+  renderTimelineTracks();
+  setVideoView(sessionState.videoView || "primary");
+  redraw();
+  redraw("comparison");
+  state.restoringProject = false;
+}
+
+function scheduleProjectSessionAutosave(delay = 900) {
+  if (state.restoringProject || !state.selectedProjectId) return;
+  window.clearTimeout(state.sessionAutoSaveTimer);
+  state.sessionAutoSaveTimer = window.setTimeout(() => {
+    saveCurrentProjectSession();
+  }, delay);
+}
+
+async function saveCurrentProjectSession() {
+  if (state.restoringProject) return false;
+  window.clearTimeout(state.sessionAutoSaveTimer);
+  state.sessionAutoSaveTimer = null;
+  const project = getSelectedProject();
+  if (!project) return false;
+  if (state.workspaceProjectId !== state.selectedProjectId) return false;
+
+  project.sessionState = getCurrentProjectSessionState();
+  persistProjects();
+
+  if (state.sessionSaveInFlight) {
+    state.sessionSaveQueued = true;
+    return false;
+  }
+
+  state.sessionSaveInFlight = true;
+  const saved = await saveProjectToSupabase(project);
+  state.sessionSaveInFlight = false;
+  if (state.sessionSaveQueued) {
+    state.sessionSaveQueued = false;
+    return saveCurrentProjectSession();
+  }
+  return saved;
+}
+
 function projectFromPlayer(player) {
   const metadata = parseProjectNotesMetadata(player.notes);
   return {
@@ -1905,6 +2208,7 @@ function projectFromPlayer(player) {
     sport: player.position || metadata.sport || "",
     age: metadata.age || "",
     team: metadata.team || "",
+    sessionState: metadata.sessionState || {},
     createdAt: player.created_at || new Date().toISOString()
   };
 }
@@ -1917,16 +2221,21 @@ function projectToPlayer(project) {
     position: project.sport || null,
     notes: JSON.stringify({
       age: project.age || "",
-      team: project.team || ""
+      team: project.team || "",
+      sessionState: project.sessionState || {}
     })
   };
 }
 
 async function saveProjectToSupabase(project) {
-  if (!supabase || !state.user?.id || !project?.id) return;
+  if (!supabase || !state.user?.id || !project?.id) return false;
   const payload = projectToPlayer(project);
   const { error } = await supabase.from("players").upsert(payload, { onConflict: "id" });
-  if (error) console.warn("Could not save project to Supabase", error.message);
+  if (error) {
+    console.warn("Could not save project to Supabase", error.message);
+    return false;
+  }
+  return true;
 }
 
 async function deleteProjectFromSupabase(projectId) {
@@ -1990,6 +2299,7 @@ function updateProjectChrome() {
 
 async function selectProject(projectId, { openEditor = false } = {}) {
   if (projectId === state.selectedProjectId) {
+    if (state.workspaceProjectId !== projectId) await loadProjectWorkspace();
     if (openEditor) setView("editor");
     return;
   }
@@ -2029,6 +2339,8 @@ function resetEditorSurface() {
   state.selectedSegmentId = null;
   state.audioMuted = false;
   state.drawingTarget = "original";
+  state.primaryMediaId = null;
+  state.compareMediaId = null;
   clearFrameStrip();
   clearCompareFrameStrip();
   $("#timelineA").value = 0;
@@ -2049,12 +2361,20 @@ function resetEditorSurface() {
 }
 
 async function loadProjectWorkspace({ resetSurface = true } = {}) {
+  state.restoringProject = true;
   if (resetSurface) resetEditorSurface();
+  const existingOtherMedia = state.libraryMedia.filter((media) => media.projectId !== state.selectedProjectId);
+  const localProjectMedia = state.libraryMedia.filter((media) => media.projectId === state.selectedProjectId);
+  const projectMedia = await loadProjectMediaFromSupabase(localProjectMedia);
+  state.libraryMedia = [...existingOtherMedia, ...projectMedia];
   const storedFrames = readProjectJson("frames", []);
   const localFrames = storedFrames.filter(frameBelongsToSelectedProject);
   state.savedFrames = await loadSavedFramesFromSupabase(localFrames);
   if (state.savedFrames.length !== storedFrames.length) persistSavedFrames();
-  state.projectNotes = readProjectNotes();
+  const selectedProject = getSelectedProject();
+  state.projectNotes = Array.isArray(selectedProject?.sessionState?.projectNotes)
+    ? cloneJson(selectedProject.sessionState.projectNotes, [])
+    : readProjectNotes();
   const localEvaluations = readProjectJson("evaluations", []).filter((evaluation) => !evaluation.project_id || evaluation.project_id === state.selectedProjectId);
   state.evaluations = await loadEvaluationsFromSupabase(localEvaluations);
   persistEvaluations();
@@ -2065,6 +2385,10 @@ async function loadProjectWorkspace({ resetSurface = true } = {}) {
   renderProjectNotes();
   renderEvaluationList();
   updateProjectChrome();
+  applyProjectSessionState(selectedProject?.sessionState || {});
+  renderProjectNotes();
+  renderTimelineTracks();
+  state.workspaceProjectId = state.selectedProjectId;
 }
 
 function renderDashboardProjects() {
@@ -2297,12 +2621,24 @@ function exportReport() {
 
 function setView(view) {
   const isDashboard = view === "dashboard";
-  if (isDashboard) persistCurrentFrameEdit();
+  if (isDashboard) {
+    persistCurrentFrameEdit();
+    saveCurrentProjectSession();
+  } else {
+    scheduleProjectSessionAutosave();
+  }
   $("#app").classList.toggle("dashboard-mode", isDashboard);
   $("#dashboardView").hidden = !isDashboard;
   $("#editorNavBtn").classList.toggle("active-view", !isDashboard);
   $("#dashboardNavBtn").classList.toggle("active-view", isDashboard);
   if (!isDashboard) requestAnimationFrame(resizeCanvases);
+}
+
+async function openSelectedProjectEditor() {
+  if (state.selectedProjectId && state.workspaceProjectId !== state.selectedProjectId) {
+    await loadProjectWorkspace();
+  }
+  setView("editor");
 }
 
 async function getAccessToken() {
@@ -2317,6 +2653,7 @@ async function requireFreshLogin() {
   state.subscription = "free";
   state.projects = [];
   state.selectedProjectId = null;
+  state.workspaceProjectId = null;
   state.savedFrames = [];
   state.evaluations = [];
   state.projectNotes = [];
@@ -2335,6 +2672,7 @@ document.querySelectorAll("[data-tool]").forEach((button) => {
   button.addEventListener("click", () => {
     state.tool = button.dataset.tool;
     document.querySelectorAll("[data-tool]").forEach((el) => el.classList.toggle("active", el === button));
+    scheduleProjectSessionAutosave();
   });
 });
 
@@ -2398,6 +2736,7 @@ function setupAnnotationCanvas(canvas, target) {
     }
     redraw(target);
     if (target === "frame") persistCurrentFrameEdit();
+    scheduleProjectSessionAutosave();
   });
 
   canvas.addEventListener("pointercancel", () => {
@@ -2529,6 +2868,8 @@ $("#undoBtn").addEventListener("click", () => {
   const target = getActiveAnnotationTarget();
   getAnnotationSurface(target).annotations.pop();
   redraw(target);
+  if (target === "frame") persistCurrentFrameEdit();
+  scheduleProjectSessionAutosave();
 });
 $("#clearBtn").addEventListener("click", () => {
   const target = getActiveAnnotationTarget();
@@ -2536,10 +2877,12 @@ $("#clearBtn").addEventListener("click", () => {
   else if (target === "frame") state.frameAnnotations = [];
   else state.annotations = [];
   redraw(target);
+  if (target === "frame") persistCurrentFrameEdit();
+  scheduleProjectSessionAutosave();
 });
 const authBtn = $("#authBtn");
 if (authBtn) authBtn.addEventListener("click", () => $("#authDialog").showModal());
-$("#editorNavBtn").addEventListener("click", () => setView("editor"));
+$("#editorNavBtn").addEventListener("click", openSelectedProjectEditor);
 $("#dashboardNavBtn").addEventListener("click", () => setView("dashboard"));
 $("#newProjectBtn")?.addEventListener("click", openNewProjectDialog);
 $("#newProjectForm")?.addEventListener("submit", submitNewProject);
@@ -2553,11 +2896,10 @@ document.querySelectorAll("[data-dashboard-target]").forEach((button) => {
 });
 $("#dashboardSideSignOutBtn")?.addEventListener("click", signOutDashboard);
 $("#dashboardUploadBtn")?.addEventListener("click", () => {
-  setView("editor");
-  fileA.click();
+  openSelectedProjectEditor().then(() => fileA.click());
 });
 document.querySelectorAll("[data-open-editor]").forEach((button) => {
-  button.addEventListener("click", () => setView("editor"));
+  button.addEventListener("click", openSelectedProjectEditor);
 });
 $("#pricingBtn").addEventListener("click", () => $("#pricingDialog").showModal());
 document.querySelectorAll("[data-close]").forEach((button) => {
@@ -2571,9 +2913,11 @@ $("#portalBtn").addEventListener("click", openPortal);
 $("#dashboardPortalBtn").addEventListener("click", openPortal);
 $("#colorInput").addEventListener("input", (event) => {
   state.color = event.target.value;
+  scheduleProjectSessionAutosave();
 });
 $("#widthInput").addEventListener("input", (event) => {
   state.width = Number(event.target.value);
+  scheduleProjectSessionAutosave();
 });
 $("#saveNoteBtn").addEventListener("click", saveProjectNote);
 $("#mechanicsNoteList")?.addEventListener("click", (event) => {
