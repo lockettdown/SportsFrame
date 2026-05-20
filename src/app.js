@@ -162,6 +162,15 @@ function getMediaSourceUrl(media) {
   return media.file ? URL.createObjectURL(media.file) : "";
 }
 
+function isCrossOriginSource(url) {
+  if (!isRemoteUrl(url) || url.startsWith("blob:")) return false;
+  try {
+    return new URL(url).origin !== window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
 function getLayoutBounds(type) {
   if (type === "library") {
     return {
@@ -335,6 +344,8 @@ function loadVideo(media, video, emptyEl, options = {}) {
   }
   video.style.visibility = "visible";
   video.closest(".video-pane")?.classList.add("loaded");
+  if (isCrossOriginSource(sourceUrl)) video.crossOrigin = "anonymous";
+  else video.removeAttribute("crossorigin");
   video.src = sourceUrl;
   video.load();
   emptyEl.hidden = true;
@@ -351,6 +362,7 @@ function loadImage(media, emptyEl, options = {}) {
   const sourceUrl = getMediaSourceUrl(media);
   if (!sourceUrl) return;
   const image = new Image();
+  if (isCrossOriginSource(sourceUrl)) image.crossOrigin = "anonymous";
   image.addEventListener("load", () => {
     state.stillImage = image;
     state.captured = true;
@@ -417,7 +429,7 @@ async function saveImportedMediaToSupabase(media) {
     .upload(storagePath, media.file, {
       cacheControl: "3600",
       contentType: media.file.type || "application/octet-stream",
-      upsert: true
+      upsert: false
     });
   if (uploadError) {
     console.warn("Could not upload media to Supabase Storage", uploadError.message);
@@ -624,36 +636,59 @@ async function generateVideoFrameStrip({ video, strip, statusEl, runKey, onSelec
   thumbCanvas.height = 72;
   const thumbCtx = thumbCanvas.getContext("2d");
 
-  for (let index = 0; index < frameCount; index += 1) {
-    if (run !== state[runKey]) return;
-    const frameNumber = Math.min(totalFrames, Math.round(index * step));
-    const time = Math.min(video.duration, frameNumber / state.frameRate);
-    await seekAndWait(video, time);
-    thumbCtx.clearRect(0, 0, thumbCanvas.width, thumbCanvas.height);
-    drawContainedVideo(thumbCtx, video, thumbCanvas.width, thumbCanvas.height);
+  try {
+    for (let index = 0; index < frameCount; index += 1) {
+      if (run !== state[runKey]) return;
+      const frameNumber = Math.min(totalFrames, Math.round(index * step));
+      const time = Math.min(video.duration, frameNumber / state.frameRate);
+      await seekAndWait(video, time);
+      if (run !== state[runKey]) return;
+      thumbCtx.clearRect(0, 0, thumbCanvas.width, thumbCanvas.height);
+      drawContainedVideo(thumbCtx, video, thumbCanvas.width, thumbCanvas.height);
 
-    const button = document.createElement("button");
-    button.className = "frame-thumb";
-    button.type = "button";
-    button.dataset.time = String(time);
-    button.setAttribute("aria-label", `Seek to ${formatTime(time)}`);
+      const button = document.createElement("button");
+      button.className = "frame-thumb";
+      button.type = "button";
+      button.dataset.time = String(time);
+      button.setAttribute("aria-label", `Seek to ${formatTime(time)}`);
 
-    const img = document.createElement("img");
-    img.src = thumbCanvas.toDataURL("image/jpeg", 0.72);
-    img.alt = "";
+      const img = document.createElement("img");
+      img.src = thumbCanvas.toDataURL("image/jpeg", 0.72);
+      img.alt = "";
 
-    const label = document.createElement("span");
-    label.textContent = formatTime(time);
+      const label = document.createElement("span");
+      label.textContent = formatTime(time);
 
-    button.append(img, label);
-    button.addEventListener("click", () => onSelect(time));
-    strip.append(button);
+      button.append(img, label);
+      button.addEventListener("click", () => onSelect(time));
+      strip.append(button);
+    }
+
+    await seekAndWait(video, originalTime);
+    if (!wasPaused) await video.play();
+    statusEl.textContent = `${frameCount} frames sampled · scroll to move one frame`;
+    onUpdateSelection(video.currentTime);
+  } catch (error) {
+    console.warn("Could not build frame strip", error);
+    if (run === state[runKey]) {
+      strip.innerHTML = "";
+      statusEl.textContent = "Frame strip unavailable for this video";
+    }
   }
+}
 
-  await seekAndWait(video, originalTime);
-  if (!wasPaused) await video.play();
-  statusEl.textContent = `${frameCount} frames sampled · scroll to move one frame`;
-  onUpdateSelection(video.currentTime);
+function waitForVideoFrame(video) {
+  return new Promise((resolve) => {
+    if (typeof video.requestVideoFrameCallback === "function") {
+      const timeout = window.setTimeout(resolve, 700);
+      video.requestVideoFrameCallback(() => {
+        window.clearTimeout(timeout);
+        resolve();
+      });
+      return;
+    }
+    window.setTimeout(resolve, 80);
+  });
 }
 
 function seekAndWait(video, time) {
@@ -661,10 +696,13 @@ function seekAndWait(video, time) {
     const maxTime = Math.max(0, (video.duration || 0) - 0.001);
     const targetTime = Math.max(0, Math.min(maxTime, time));
     const alreadyThere = Math.abs(video.currentTime - targetTime) < 0.001;
-    const done = () => {
+    const done = async () => {
       video.removeEventListener("seeked", done);
+      window.clearTimeout(timeout);
+      await waitForVideoFrame(video);
       resolve();
     };
+    const timeout = window.setTimeout(done, 1400);
     if (alreadyThere) {
       requestAnimationFrame(done);
       return;
@@ -1896,6 +1934,7 @@ function loadSavedFrame(frame) {
   const noteInput = $("#savedFrameNoteInput");
   if (noteInput) noteInput.value = frame.note || "";
   const image = new Image();
+  if (isCrossOriginSource(frame.baseImage || frame.image)) image.crossOrigin = "anonymous";
   image.addEventListener("load", () => {
     state.frameStillImage = image;
     state.frameAnnotations = structuredClone(frame.baseImage ? frame.annotations || [] : []);
