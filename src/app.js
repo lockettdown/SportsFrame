@@ -1274,20 +1274,17 @@ function makeSnapshotCanvas(target, includeAnnotations = true) {
 
 function persistSavedFrames() {
   const key = getProjectStorageKey("frames");
-  while (state.savedFrames.length) {
-    try {
-      localStorage.setItem(key, JSON.stringify(state.savedFrames));
-      return true;
-    } catch {
-      state.savedFrames.pop();
-    }
+  if (supabase && state.user?.id) {
+    localStorage.removeItem(key);
+    return true;
   }
+
   try {
-    localStorage.setItem(key, JSON.stringify([]));
+    localStorage.setItem(key, JSON.stringify(state.savedFrames));
+    return true;
   } catch {
     return false;
   }
-  return false;
 }
 
 function getProjectStorageKey(name, projectId = state.selectedProjectId) {
@@ -1341,9 +1338,13 @@ function savedFrameToRow(frame) {
 }
 
 async function saveSavedFrameToSupabase(frame) {
-  if (!supabase || !state.user?.id || !state.selectedProjectId || !frame?.image) return;
+  if (!supabase || !state.user?.id || !state.selectedProjectId || !frame?.image) return false;
   const { error } = await supabase.from("saved_frames").upsert(savedFrameToRow(frame), { onConflict: "id" });
-  if (error) console.warn("Could not save frame to Supabase", error.message);
+  if (error) {
+    console.warn("Could not save frame to Supabase", error.message);
+    return false;
+  }
+  return true;
 }
 
 async function deleteSavedFrameFromSupabase(frameId) {
@@ -1544,7 +1545,7 @@ function persistCurrentProjectWorkspace() {
   persistEvaluations();
 }
 
-function saveAnnotatedFrame() {
+async function saveAnnotatedFrame() {
   const target = getActiveSaveTarget();
   const baseCanvas = makeSnapshotCanvas(target, false);
   const annotatedCanvas = makeSnapshotCanvas(target, true);
@@ -1565,12 +1566,25 @@ function saveAnnotatedFrame() {
     annotations: structuredClone(getAnnotationSurface(target).annotations)
   };
   state.savedFrames.unshift(frame);
+  renderSavedFrames();
+  if (supabase && state.user?.id) {
+    const saved = await saveSavedFrameToSupabase(frame);
+    if (!saved) {
+      state.savedFrames = state.savedFrames.filter((item) => item.id !== frame.id);
+      renderSavedFrames();
+      alert("This saved frame could not sync to your account. Please try again.");
+      return null;
+    }
+    persistSavedFrames();
+    return frame;
+  }
+
   if (!persistSavedFrames()) {
+    state.savedFrames = state.savedFrames.filter((item) => item.id !== frame.id);
+    renderSavedFrames();
     alert("This browser could not store the saved frame. Try deleting older saved frames.");
     return null;
   }
-  saveSavedFrameToSupabase(frame);
-  renderSavedFrames();
   return frame;
 }
 
