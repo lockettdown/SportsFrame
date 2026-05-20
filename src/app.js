@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import * as tus from "tus-js-client";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "https://dcohvsdvjcxhpiynniuw.supabase.co";
 const supabaseBrowserKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
@@ -88,6 +89,8 @@ const storageBuckets = {
 };
 
 const signedUrlLifetimeSeconds = 60 * 60 * 24;
+const resumableUploadThresholdBytes = 6 * 1024 * 1024;
+const tusChunkSizeBytes = 6 * 1024 * 1024;
 
 function clampNumber(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -169,6 +172,19 @@ function isCrossOriginSource(url) {
   } catch {
     return false;
   }
+}
+
+function getSupabaseProjectRef() {
+  try {
+    return new URL(supabaseUrl).hostname.split(".")[0];
+  } catch {
+    return "";
+  }
+}
+
+function getResumableUploadEndpoint() {
+  const projectRef = getSupabaseProjectRef();
+  return projectRef ? `https://${projectRef}.storage.supabase.co/storage/v1/upload/resumable` : "";
 }
 
 function getLayoutBounds(type) {
@@ -407,11 +423,12 @@ async function importMediaFile(file) {
   state.libraryMedia.unshift(media);
   renderLibraryMedia();
   if (supabase && state.user?.id) {
-    const saved = await saveImportedMediaToSupabase(media);
+    const { ok: saved, message } = await saveImportedMediaToSupabase(media);
     if (!saved) {
-      state.libraryMedia = state.libraryMedia.filter((item) => item.id !== media.id);
+      media.uploading = false;
+      media.syncError = true;
       renderLibraryMedia();
-      alert("This media could not sync to your account. Please try uploading it again.");
+      alert(message || "This media could not sync to your account. You can use it in this browser, but upload it again before switching devices.");
       return;
     }
   }
@@ -421,19 +438,20 @@ async function importMediaFile(file) {
 }
 
 async function saveImportedMediaToSupabase(media) {
-  if (!supabase || !state.user?.id || !state.selectedProjectId || !media?.file) return false;
+  if (!supabase || !state.user?.id || !state.selectedProjectId || !media?.file) {
+    return { ok: false, message: "You need to be signed in before media can sync." };
+  }
   const filename = sanitizeStorageFilename(media.file.name);
   const storagePath = `${state.user.id}/${state.selectedProjectId}/media/${media.id}-${filename}`;
-  const { error: uploadError } = await supabase.storage
-    .from(storageBuckets.videos)
-    .upload(storagePath, media.file, {
-      cacheControl: "3600",
-      contentType: media.file.type || "application/octet-stream",
-      upsert: false
-    });
+  const uploadError = media.file.size >= resumableUploadThresholdBytes
+    ? await uploadMediaWithTus(media.file, storagePath)
+    : await uploadMediaWithStandardRequest(media.file, storagePath);
   if (uploadError) {
-    console.warn("Could not upload media to Supabase Storage", uploadError.message);
-    return false;
+    console.warn("Could not upload media to Supabase Storage", uploadError.message || uploadError);
+    return {
+      ok: false,
+      message: `This media could not sync to your account: ${uploadError.message || "Upload failed"}.`
+    };
   }
 
   const payload = {
@@ -455,12 +473,61 @@ async function saveImportedMediaToSupabase(media) {
     .upsert(payload, { onConflict: "id" });
   if (rowError) {
     console.warn("Could not save media record to Supabase", rowError.message);
-    return false;
+    return {
+      ok: false,
+      message: `The video uploaded, but the project record could not be saved: ${rowError.message}.`
+    };
   }
 
   media.storagePath = storagePath;
   media.url = await getSignedStorageUrl(storageBuckets.videos, storagePath);
-  return true;
+  return { ok: true };
+}
+
+async function uploadMediaWithStandardRequest(file, storagePath) {
+  const { error } = await supabase.storage
+    .from(storageBuckets.videos)
+    .upload(storagePath, file, {
+      cacheControl: "3600",
+      contentType: file.type || "application/octet-stream",
+      upsert: false
+    });
+  if (!error) return null;
+  if (file.size < resumableUploadThresholdBytes) return error;
+  return uploadMediaWithTus(file, storagePath);
+}
+
+async function uploadMediaWithTus(file, storagePath) {
+  const endpoint = getResumableUploadEndpoint();
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!endpoint || !token) return new Error("Missing upload session");
+
+  return new Promise((resolve) => {
+    const upload = new tus.Upload(file, {
+      endpoint,
+      retryDelays: [0, 1000, 3000, 5000],
+      headers: {
+        authorization: `Bearer ${token}`,
+        apikey: supabaseBrowserKey
+      },
+      uploadDataDuringCreation: true,
+      removeFingerprintOnSuccess: true,
+      chunkSize: tusChunkSizeBytes,
+      metadata: {
+        bucketName: storageBuckets.videos,
+        objectName: storagePath,
+        contentType: file.type || "application/octet-stream",
+        cacheControl: "3600"
+      },
+      onError: (error) => resolve(error),
+      onSuccess: () => resolve(null)
+    });
+    upload.findPreviousUploads().then((previousUploads) => {
+      if (previousUploads.length) upload.resumeFromPreviousUpload(previousUploads[0]);
+      upload.start();
+    }).catch((error) => resolve(error));
+  });
 }
 
 async function loadProjectMediaFromSupabase(localMedia = []) {
@@ -629,7 +696,7 @@ async function generateVideoFrameStrip({ video, strip, statusEl, runKey, onSelec
   video.pause();
 
   const totalFrames = Math.max(1, Math.floor(video.duration * state.frameRate));
-  const frameCount = Math.min(totalFrames + 1, 96);
+  const frameCount = Math.min(totalFrames + 1, 32);
   const step = frameCount > 1 ? totalFrames / (frameCount - 1) : 1;
   const thumbCanvas = document.createElement("canvas");
   thumbCanvas.width = 128;
@@ -639,6 +706,7 @@ async function generateVideoFrameStrip({ video, strip, statusEl, runKey, onSelec
   try {
     for (let index = 0; index < frameCount; index += 1) {
       if (run !== state[runKey]) return;
+      statusEl.textContent = `Building frame strip ${index + 1}/${frameCount}...`;
       const frameNumber = Math.min(totalFrames, Math.round(index * step));
       const time = Math.min(video.duration, frameNumber / state.frameRate);
       await seekAndWait(video, time);
@@ -1181,7 +1249,8 @@ function addImportedMediaItem(media, isActive = false) {
   const title = document.createElement("strong");
   title.textContent = getMediaName(media);
   const meta = document.createElement("small");
-  meta.textContent = `${media.kind}${media.uploading ? " · Syncing..." : " · Drag to a window"}`;
+  const syncStatus = media.uploading ? "Syncing..." : media.syncError ? "Sync failed · local only" : "Drag to a window";
+  meta.textContent = `${media.kind} · ${syncStatus}`;
   copy.append(title, meta);
   item.append(thumb, copy);
   item.addEventListener("click", () => {
