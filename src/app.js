@@ -451,7 +451,7 @@ async function saveImportedMediaToSupabase(media) {
     console.warn("Could not upload media to Supabase Storage", uploadError.message || uploadError);
     return {
       ok: false,
-      message: `This media could not sync to your account: ${uploadError.message || "Upload failed"}.`
+      message: uploadErrorMessage(uploadError, media.file)
     };
   }
 
@@ -495,6 +495,24 @@ async function uploadMediaWithStandardRequest(file, storagePath) {
     });
   if (!error) return null;
   return uploadMediaWithTus(file, storagePath);
+}
+
+function formatFileSize(bytes = 0) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 MB";
+  const megabytes = bytes / (1024 * 1024);
+  return `${megabytes.toFixed(megabytes >= 100 ? 0 : 1)} MB`;
+}
+
+function uploadErrorMessage(error, file) {
+  const rawMessage = error?.message || String(error || "Upload failed");
+  const sizeLimitProblem = /maximum size exceeded|object exceeded|413/i.test(rawMessage);
+  if (sizeLimitProblem) {
+    return [
+      `${file?.name || "This video"} is ${formatFileSize(file?.size)} and is larger than the current Supabase project upload limit.`,
+      "It will stay usable on this browser, but it cannot sync across devices until the Supabase Storage global file size limit is raised."
+    ].join(" ");
+  }
+  return `This media could not sync to your account: ${rawMessage}.`;
 }
 
 async function uploadMediaWithTus(file, storagePath) {
