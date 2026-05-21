@@ -699,8 +699,22 @@ function seekVideo(video, range) {
 
 function stepFrame(direction, video = videoA) {
   if (!video.src) return;
-  video.pause();
-  seekToVideoTime(video, video.currentTime + direction / state.frameRate);
+  const videos = getSyncedPlaybackVideos(video);
+  videos.forEach((item) => item.pause());
+  videos.forEach((item) => {
+    seekToVideoTime(item, item.currentTime + direction / state.frameRate);
+    setPlaybackButton(item === videoA ? $("#playBtn") : $("#comparePlayBtn"), item);
+  });
+}
+
+function isSyncPlaybackEnabled() {
+  return Boolean($("#syncToggle")?.checked);
+}
+
+function getSyncedPlaybackVideos(video) {
+  const peer = video === videoA ? videoB : videoA;
+  if (!isSyncPlaybackEnabled() || !peer.src) return [video];
+  return [video, peer];
 }
 
 function seekToVideoTime(video, time) {
