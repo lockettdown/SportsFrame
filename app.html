@@ -423,6 +423,18 @@
       </form>
     </dialog>
 
+    <dialog id="deleteMediaDialog" class="modal">
+      <form class="modal-card confirm-modal" id="deleteMediaForm">
+        <button class="close-button" type="button" data-close="deleteMediaDialog" aria-label="Close">x</button>
+        <h2>Delete Footage</h2>
+        <p id="deleteMediaCopy">This footage will be removed from the Library.</p>
+        <div class="modal-actions">
+          <button class="ghost-button" type="button" data-close="deleteMediaDialog">Cancel</button>
+          <button class="primary-button danger-button" id="confirmDeleteMediaBtn" type="submit">Delete Footage</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog id="savedFrameEditDialog" class="modal">
       <form class="modal-card saved-frame-edit-modal" method="dialog">
         <button class="close-button" type="button" data-close="savedFrameEditDialog" aria-label="Close">x</button>

@@ -46,6 +46,7 @@ const state = {
   captured: false,
   comparing: false,
   pendingDeleteProjectId: null,
+  pendingDeleteMediaId: null,
   videoView: "primary",
   primaryMediaId: null,
   compareMediaId: null,
@@ -580,6 +581,91 @@ function assignMediaToPane(media, pane, options = {}) {
     item.classList.toggle("active", item.dataset.mediaId === media.id);
   });
   if (!options.skipAutosave) scheduleProjectSessionAutosave();
+}
+
+async function deleteMediaFromSupabase(media) {
+  if (!supabase || !state.user?.id || !media?.id) return;
+  const { error: rowError } = await supabase
+    .from("videos")
+    .delete()
+    .eq("id", media.id)
+    .eq("user_id", state.user.id);
+  if (rowError) console.warn("Could not delete media record from Supabase", rowError.message);
+
+  if (media.storagePath) {
+    const { error: storageError } = await supabase.storage
+      .from(storageBuckets.videos)
+      .remove([media.storagePath]);
+    if (storageError) console.warn("Could not delete media file from Supabase Storage", storageError.message);
+  }
+}
+
+function clearAssignedMedia(mediaId) {
+  if (state.primaryMediaId === mediaId) {
+    state.primaryMediaId = null;
+    state.currentMediaKind = null;
+    state.stillImage = null;
+    state.captured = false;
+    state.annotations = [];
+    state.timelineSegments = [];
+    state.selectedSegmentId = null;
+    videoA.pause();
+    videoA.removeAttribute("src");
+    videoA.load();
+    videoA.style.visibility = "visible";
+    videoA.closest(".video-pane")?.classList.remove("loaded");
+    $("#emptyA").hidden = false;
+    $("#timelineA").value = 0;
+    $("#timeA").textContent = formatTime(0);
+    clearFrameStrip();
+    const rect = captureCanvas.getBoundingClientRect();
+    captureCtx.clearRect(0, 0, rect.width, rect.height);
+    redraw();
+    renderTimelineTracks();
+  }
+
+  if (state.compareMediaId === mediaId) {
+    state.compareMediaId = null;
+    state.compareStillImage = null;
+    state.compareAnnotations = [];
+    videoB.pause();
+    videoB.removeAttribute("src");
+    videoB.load();
+    videoB.style.visibility = "visible";
+    videoB.closest(".video-pane")?.classList.remove("loaded");
+    $("#emptyB").hidden = false;
+    $("#timelineB").value = 0;
+    $("#timeB").textContent = formatTime(0);
+    clearCompareFrameStrip();
+    const rect = compareCaptureCanvas.getBoundingClientRect();
+    compareCaptureCtx.clearRect(0, 0, rect.width, rect.height);
+    redraw("comparison");
+  }
+}
+
+function openDeleteMediaDialog(mediaId) {
+  const media = getLibraryMedia(mediaId);
+  if (!media) return;
+  state.pendingDeleteMediaId = mediaId;
+  const copy = $("#deleteMediaCopy");
+  if (copy) copy.textContent = `Delete "${getMediaName(media)}" from this project? This removes it from the Library and synced storage.`;
+  $("#deleteMediaDialog")?.showModal();
+}
+
+async function confirmMediaDelete(event) {
+  event.preventDefault();
+  const mediaId = state.pendingDeleteMediaId;
+  if (!mediaId) return;
+  const media = getLibraryMedia(mediaId);
+  state.pendingDeleteMediaId = null;
+  $("#deleteMediaDialog")?.close();
+  if (!media) return;
+
+  state.libraryMedia = state.libraryMedia.filter((item) => item.id !== media.id);
+  clearAssignedMedia(media.id);
+  renderLibraryMedia();
+  await deleteMediaFromSupabase(media);
+  scheduleProjectSessionAutosave();
 }
 
 function updateTimeline(video, range) {
@@ -1238,12 +1324,13 @@ function addImportedMediaItem(media, isActive = false) {
   if (!library) return;
   $("#libraryEmpty")?.remove();
   if (isActive) document.querySelectorAll(".media-item").forEach((item) => item.classList.remove("active"));
-  const item = document.createElement("button");
+  const item = document.createElement("article");
   item.className = `media-item${isActive ? " active" : ""}`;
-  item.type = "button";
+  item.tabIndex = 0;
+  item.role = "button";
   item.draggable = true;
   item.dataset.mediaId = media.id;
-  item.setAttribute("aria-label", `Drag ${getMediaName(media)} into a video window`);
+  item.setAttribute("aria-label", `Select ${getMediaName(media)}. Drag into a video window.`);
   const thumb = document.createElement("span");
   thumb.className = "media-thumb imported";
   const copy = document.createElement("span");
@@ -1253,14 +1340,28 @@ function addImportedMediaItem(media, isActive = false) {
   const meta = document.createElement("small");
   const syncStatus = media.uploading ? "Syncing..." : media.syncError ? "Sync failed · local only" : "Drag to a window";
   meta.textContent = `${media.kind} · ${syncStatus}`;
+  const deleteButton = document.createElement("button");
+  deleteButton.className = "media-delete-button";
+  deleteButton.type = "button";
+  deleteButton.textContent = "Delete";
+  deleteButton.setAttribute("aria-label", `Delete ${getMediaName(media)} from library`);
   copy.append(title, meta);
-  item.append(thumb, copy);
+  item.append(thumb, copy, deleteButton);
   item.addEventListener("click", () => {
+    document.querySelectorAll(".media-item").forEach((el) => el.classList.toggle("active", el === item));
+  });
+  item.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
     document.querySelectorAll(".media-item").forEach((el) => el.classList.toggle("active", el === item));
   });
   item.addEventListener("dragstart", (event) => {
     event.dataTransfer.setData("text/plain", media.id);
     event.dataTransfer.effectAllowed = "copy";
+  });
+  deleteButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openDeleteMediaDialog(media.id);
   });
   library.append(item);
 }
@@ -2999,6 +3100,10 @@ $("#newProjectForm")?.addEventListener("submit", submitNewProject);
 $("#deleteProjectForm")?.addEventListener("submit", confirmProjectDelete);
 $("#deleteProjectDialog")?.addEventListener("close", () => {
   state.pendingDeleteProjectId = null;
+});
+$("#deleteMediaForm")?.addEventListener("submit", confirmMediaDelete);
+$("#deleteMediaDialog")?.addEventListener("close", () => {
+  state.pendingDeleteMediaId = null;
 });
 document.querySelectorAll("[data-dashboard-target]").forEach((button) => {
   button.setAttribute("aria-pressed", String(button.classList.contains("selected")));
