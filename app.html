@@ -228,7 +228,7 @@
               <h2>Inspector</h2>
               <div class="inspector-tabs" role="tablist" aria-label="Inspector sections">
                 <button class="selected" type="button" id="aiTabBtn" data-inspector-tab="ai">AI Coach</button>
-                <button type="button" id="notesTabBtn" data-inspector-tab="notes">Mechanics Notes</button>
+                <button type="button" id="evaluationInspectorTabBtn" data-inspector-tab="evaluations">Evaluation</button>
                 <button type="button" id="framesTabBtn" data-inspector-tab="frames">Saved Frames</button>
               </div>
             </div>
@@ -237,13 +237,19 @@
               <div class="panel-heading">
                 <button id="aiAnalyzeBtn" type="button">Analyze</button>
                 <button id="inspectorSaveFrameBtn" type="button">Saved Frame</button>
-                <button class="ai-status" id="evaluationTabBtn" type="button">Evaluation</button>
               </div>
               <div class="ai-saved-frame-list" id="aiSavedFrameList"></div>
-              <div class="evaluation-list" id="evaluationList"></div>
               <div class="ai-result" id="aiResult">
                 <p>Save swing frames, then select Analyze to get AI coaching feedback on what looks correct, what needs work, and how to fix it.</p>
               </div>
+            </section>
+
+            <section class="inspector-panel evaluation-panel" id="evaluationPanel" hidden>
+              <div class="panel-heading">
+                <h2>Evaluation</h2>
+                <span id="evaluationCount">0</span>
+              </div>
+              <div class="evaluation-list" id="evaluationList"></div>
             </section>
 
             <section class="inspector-panel" id="notesPanel" hidden>

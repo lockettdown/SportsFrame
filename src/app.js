@@ -999,10 +999,17 @@ function persistEvaluations() {
 
 function renderEvaluationList() {
   const list = $("#evaluationList");
+  const count = $("#evaluationCount");
   if (!list) return;
   const evaluations = state.evaluations.filter((evaluation) => !isConnectionFallbackEvaluation(evaluation));
+  if (count) count.textContent = String(evaluations.length);
   if (!evaluations.length) {
-    list.innerHTML = "";
+    list.innerHTML = `
+      <div class="empty-evaluation-list">
+        <strong>No evaluations yet</strong>
+        <span>Save frames, then select Analyze in AI Coach.</span>
+      </div>
+    `;
     return;
   }
 
@@ -2915,6 +2922,7 @@ document.querySelectorAll("[data-inspector-tab]").forEach((button) => {
     const tab = button.dataset.inspectorTab;
     document.querySelectorAll("[data-inspector-tab]").forEach((el) => el.classList.toggle("selected", el === button));
     $("#aiPanel").hidden = tab !== "ai";
+    $("#evaluationPanel").hidden = tab !== "evaluations";
     $("#notesPanel").hidden = tab !== "notes";
     $("#framesPanel").hidden = tab !== "frames";
   });
@@ -3006,11 +3014,11 @@ $("#inspectorSaveFrameBtn").addEventListener("click", () => {
   saveAnnotatedFrame();
   renderAiCoachFrames();
 });
-$("#evaluationTabBtn").addEventListener("click", () => {
+$("#evaluationTabBtn")?.addEventListener("click", () => {
   if (state.evaluations[0]) openEvaluation(state.evaluations[0].id);
   else $("#aiResult").innerHTML = "<p>No evaluations yet. Save frames, then select Analyze.</p>";
 });
-$("#evaluationList").addEventListener("click", (event) => {
+$("#evaluationList")?.addEventListener("click", (event) => {
   const button = event.target.closest("[data-open-evaluation]");
   if (!button) return;
   openEvaluation(button.dataset.openEvaluation);

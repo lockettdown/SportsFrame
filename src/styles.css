@@ -2318,6 +2318,10 @@ canvas {
   overflow: auto;
 }
 
+.evaluation-panel .evaluation-list {
+  max-height: min(68vh, 720px);
+}
+
 .evaluation-item {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -2360,6 +2364,26 @@ canvas {
   background: rgba(255, 255, 255, 0.18);
   border-color: rgba(255, 255, 255, 0.12);
   box-shadow: none;
+}
+
+.empty-evaluation-list {
+  display: grid;
+  gap: 5px;
+  padding: 14px;
+  color: var(--muted);
+  background: #15161a;
+  border: 1px dashed #343743;
+  border-radius: 5px;
+}
+
+.empty-evaluation-list strong {
+  color: var(--soft);
+  font-size: 13px;
+}
+
+.empty-evaluation-list span {
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .evaluation-dialog-body {
