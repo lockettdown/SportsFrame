@@ -428,8 +428,9 @@ async function importMediaFile(file) {
     if (!saved) {
       media.uploading = false;
       media.syncError = true;
+      media.syncMessage = message || "This media is available locally only.";
       renderLibraryMedia();
-      alert(message || "This media could not sync to your account. You can use it in this browser, but upload it again before switching devices.");
+      scheduleProjectSessionAutosave();
       return;
     }
   }
@@ -1355,6 +1356,7 @@ function addImportedMediaItem(media, isActive = false) {
   const meta = document.createElement("small");
   const syncStatus = media.uploading ? "Syncing..." : media.syncError ? "Sync failed · local only" : "Drag to a window";
   meta.textContent = `${media.kind} · ${syncStatus}`;
+  if (media.syncMessage) meta.title = media.syncMessage;
   const deleteButton = document.createElement("button");
   deleteButton.className = "media-delete-button";
   deleteButton.type = "button";

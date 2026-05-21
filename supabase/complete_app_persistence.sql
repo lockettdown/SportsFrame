@@ -6,7 +6,7 @@ values
 on conflict (id) do nothing;
 
 update storage.buckets
-set file_size_limit = greatest(coalesce(file_size_limit, 0), 524288000)
+set file_size_limit = greatest(coalesce(file_size_limit, 0), 536870912000)
 where id = 'videos';
 
 alter table public.profiles add column if not exists default_athlete text;
