@@ -179,6 +179,10 @@ values
   ('reports', 'reports', false)
 on conflict (id) do nothing;
 
+update storage.buckets
+set file_size_limit = greatest(coalesce(file_size_limit, 0), 524288000)
+where id = 'videos';
+
 create policy "users manage their own videos" on storage.objects
   for all
   using (bucket_id = 'videos' and auth.uid()::text = (storage.foldername(name))[1])

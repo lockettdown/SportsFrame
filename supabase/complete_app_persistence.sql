@@ -5,6 +5,10 @@ values
   ('reports', 'reports', false)
 on conflict (id) do nothing;
 
+update storage.buckets
+set file_size_limit = greatest(coalesce(file_size_limit, 0), 524288000)
+where id = 'videos';
+
 alter table public.profiles add column if not exists default_athlete text;
 alter table public.profiles add column if not exists coach_display_name text;
 alter table public.profiles add column if not exists report_footer text;
