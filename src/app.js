@@ -90,6 +90,7 @@ const storageBuckets = {
 };
 
 const signedUrlLifetimeSeconds = 60 * 60 * 24;
+const resumableUploadThresholdBytes = 6 * 1024 * 1024;
 const tusChunkSizeBytes = 6 * 1024 * 1024;
 
 function clampNumber(value, min, max) {
@@ -443,7 +444,9 @@ async function saveImportedMediaToSupabase(media) {
   }
   const filename = sanitizeStorageFilename(media.file.name);
   const storagePath = `${state.user.id}/${state.selectedProjectId}/media/${media.id}-${filename}`;
-  const uploadError = await uploadMediaWithStandardRequest(media.file, storagePath);
+  const uploadError = media.file.size >= resumableUploadThresholdBytes
+    ? await uploadMediaWithTus(media.file, storagePath)
+    : await uploadMediaWithStandardRequest(media.file, storagePath);
   if (uploadError) {
     console.warn("Could not upload media to Supabase Storage", uploadError.message || uploadError);
     return {
@@ -491,13 +494,7 @@ async function uploadMediaWithStandardRequest(file, storagePath) {
       upsert: false
     });
   if (!error) return null;
-  if (isStorageSizeLimitError(error)) return error;
   return uploadMediaWithTus(file, storagePath);
-}
-
-function isStorageSizeLimitError(error) {
-  const message = `${error?.message || ""} ${error?.statusCode || ""} ${error?.status || ""}`;
-  return /maximum size exceeded|object exceeded|413/i.test(message);
 }
 
 async function uploadMediaWithTus(file, storagePath) {
