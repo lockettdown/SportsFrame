@@ -2220,7 +2220,7 @@ function updateAccess() {
   const planLabel = $("#planLabel");
   const accessLabel = $("#accessLabel");
   if (planLabel) planLabel.textContent = isPro ? "Pro Coach" : "Free workspace";
-  if (accessLabel) accessLabel.textContent = isPro ? "Compare, reports, exports, and unlimited uploads enabled" : "Upgrade for compare, reports, and exports";
+  if (accessLabel) accessLabel.textContent = isPro ? "Compare, reports, exports, and unlimited uploads enabled" : "10 Day Free Trial";
   const authBtn = $("#authBtn");
   if (authBtn) authBtn.textContent = state.user ? state.user.email : "Log in";
   const authPage = $("#authPage");
