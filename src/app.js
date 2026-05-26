@@ -6,6 +6,7 @@ const supabaseBrowserKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
   || import.meta.env.VITE_SUPABASE_ANON_KEY
   || "sb_publishable_dZvedjy_POFCkE4ltiBxoA_ak7XIJnf";
 const supabase = supabaseUrl && supabaseBrowserKey ? createClient(supabaseUrl, supabaseBrowserKey) : null;
+const proSubscriptionStatuses = new Set(["pro", "active", "trialing"]);
 
 const state = {
   tool: "draw",
@@ -2215,7 +2216,7 @@ function setupPaneDropTarget(pane, target) {
 }
 
 function updateAccess() {
-  const isPro = state.subscription === "pro";
+  const isPro = isProSubscription(state.subscription);
   const planLabel = $("#planLabel");
   const accessLabel = $("#accessLabel");
   if (planLabel) planLabel.textContent = isPro ? "Pro Coach" : "Free workspace";
@@ -2229,6 +2230,32 @@ function updateAccess() {
     app.hidden = !state.user;
     if (state.user) requestAnimationFrame(resizeCanvases);
   }
+}
+
+function isProSubscription(status) {
+  return proSubscriptionStatuses.has(String(status || "").toLowerCase());
+}
+
+async function refreshSubscriptionStatus() {
+  if (!supabase || !state.user?.id) {
+    state.subscription = localStorage.getItem("diamondframe.subscription") || "free";
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("subscription_status")
+    .eq("id", state.user.id)
+    .single();
+
+  if (error) {
+    console.warn("Could not load subscription status", error.message);
+    state.subscription = localStorage.getItem("diamondframe.subscription") || "free";
+    return;
+  }
+
+  state.subscription = data?.subscription_status || "free";
+  localStorage.setItem("diamondframe.subscription", state.subscription);
 }
 
 function setAuthPageMode(mode) {
@@ -2341,6 +2368,7 @@ async function completeAuth(authUserOrEmail, fallbackEmail = "") {
     ? getFallbackUser(email)
     : getSupabaseUser(authUserOrEmail, email);
   localStorage.setItem("diamondframe.user", JSON.stringify(state.user));
+  await refreshSubscriptionStatus();
   await loadProjectsFromSupabase();
   updateAccess();
   setDashboardSection("projects");
@@ -2907,6 +2935,7 @@ async function requireFreshLogin() {
   state.evaluations = [];
   state.projectNotes = [];
   localStorage.removeItem("diamondframe.user");
+  localStorage.removeItem("diamondframe.subscription");
   localStorage.removeItem("diamondframe.selectedProjectId");
   localStorage.removeItem("diamondframe.projects");
   setAuthPageMode("login");
