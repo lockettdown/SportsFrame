@@ -1,5 +1,6 @@
 import Stripe from "stripe";
 import { getUserContext } from "./_auth.js";
+import { assertLiveStripeInProduction, getStripeErrorStatus } from "./_stripe-config.js";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: "2026-02-25.clover"
@@ -12,6 +13,7 @@ export default async function handler(request, response) {
   }
 
   try {
+    assertLiveStripeInProduction();
     const user = await getUserContext(request);
     const { plan = "monthly" } = request.body || {};
     const priceId = plan === "annual"
@@ -44,6 +46,6 @@ export default async function handler(request, response) {
 
     response.status(200).json({ url: session.url });
   } catch (error) {
-    response.status(401).json({ error: error.message });
+    response.status(getStripeErrorStatus(error)).json({ error: error.message });
   }
 }

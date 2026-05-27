@@ -1,5 +1,6 @@
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
+import { assertLiveStripeInProduction } from "./_stripe-config.js";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: "2026-02-25.clover"
@@ -26,6 +27,7 @@ export default async function handler(request, response) {
   let event;
 
   try {
+    assertLiveStripeInProduction();
     if (!process.env.STRIPE_WEBHOOK_SECRET) throw new Error("Missing STRIPE_WEBHOOK_SECRET");
     event = stripe.webhooks.constructEvent(request.rawBody, signature, process.env.STRIPE_WEBHOOK_SECRET);
   } catch (error) {
