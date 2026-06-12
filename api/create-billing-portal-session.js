@@ -1,10 +1,6 @@
 import Stripe from "stripe";
 import { getUserContext } from "./_auth.js";
-import { assertLiveStripeInProduction, getStripeErrorStatus } from "./_stripe-config.js";
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: "2026-02-25.clover"
-});
+import { STRIPE_API_VERSION, assertLiveStripeInProduction, getStripeErrorStatus } from "./_stripe-config.js";
 
 export default async function handler(request, response) {
   if (request.method !== "POST") {
@@ -13,7 +9,10 @@ export default async function handler(request, response) {
   }
 
   try {
-    assertLiveStripeInProduction();
+    const secretKey = assertLiveStripeInProduction();
+    const stripe = new Stripe(secretKey, {
+      apiVersion: STRIPE_API_VERSION
+    });
     const user = await getUserContext(request);
     if (!user.stripe_customer_id) {
       response.status(400).json({ error: "No Stripe customer is linked to this account" });

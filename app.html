@@ -3,14 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>DiamondFrame</title>
+    <title>SportsMotionPro</title>
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
   <body>
     <section id="authPage" class="auth-page" aria-label="Account access">
       <div class="auth-panel">
         <div class="auth-copy">
-          <span class="auth-brand">DiamondFrame</span>
+          <span class="auth-brand">Sports Motion Pro</span>
           <h1>Coach workspace login</h1>
           <p>Create an account, sign in, or reset your password to keep saved frames and athlete analysis private in Supabase.</p>
         </div>
@@ -46,58 +46,33 @@
     </section>
 
     <div id="app" class="app-shell editor-shell" hidden>
-      <aside class="tool-rail" aria-label="Analysis tools">
-        <div class="brand-mark" aria-label="DiamondFrame">DF</div>
-        <button class="tool-button" data-action="compare" title="Compare videos">
-          <span aria-hidden="true">▥</span>
-          <small>Compare</small>
-        </button>
-        <div class="rail-divider"></div>
-        <button class="tool-button active" data-tool="draw" title="Draw freehand">
-          <span aria-hidden="true">✎</span>
-          <small>Draw</small>
-        </button>
-        <button class="tool-button" data-tool="line" title="Straight line">
-          <span aria-hidden="true">╱</span>
-          <small>Line</small>
-        </button>
-        <button class="tool-button" data-tool="arrow" title="Arrow">
-          <span aria-hidden="true">↗</span>
-          <small>Arrow</small>
-        </button>
-        <button class="tool-button" data-tool="circle" title="Circle">
-          <span aria-hidden="true">○</span>
-          <small>Circle</small>
-        </button>
-        <button class="tool-button" data-tool="text" title="Text note">
-          <span aria-hidden="true">T</span>
-          <small>Text</small>
-        </button>
-        <div class="rail-divider"></div>
-        <button class="tool-button" id="undoBtn" title="Undo annotation">
-          <span aria-hidden="true">↶</span>
-          <small>Undo</small>
-        </button>
-        <button class="tool-button danger" id="clearBtn" title="Delete annotations">
-          <span aria-hidden="true">⌫</span>
-          <small>Delete</small>
-        </button>
-      </aside>
-
       <main class="workbench">
         <header class="topbar">
-          <div>
-            <h1>New Project</h1>
-            <p>1080p HD 23.98fps</p>
-          </div>
           <nav class="top-actions" aria-label="Primary actions">
+            <button class="ghost-button mobile-top-panel-button" type="button" data-mobile-panel="library" aria-controls="mediaBrowser" aria-expanded="false">Library</button>
             <button class="ghost-button active-view" id="editorNavBtn">Editor</button>
             <button class="ghost-button" id="dashboardNavBtn">Dashboard</button>
+            <button class="ghost-button mobile-top-panel-button" type="button" data-mobile-panel="inspector" aria-controls="inspectorPanel" aria-expanded="false">Inspector</button>
+            <button
+              class="ghost-button mobile-tools-toggle"
+              id="mobileToolsToggle"
+              type="button"
+              aria-controls="stageToolbar"
+              aria-expanded="false"
+              aria-label="Open analysis tools"
+            >
+              Tools
+            </button>
           </nav>
         </header>
 
+        <div class="mobile-panel-controls" aria-label="Mobile workspace panels">
+          <button type="button" data-mobile-panel="library" aria-controls="mediaBrowser" aria-expanded="false">Library</button>
+          <button type="button" data-mobile-panel="inspector" aria-controls="inspectorPanel" aria-expanded="false">Inspector</button>
+        </div>
+
         <section class="editor-grid" aria-label="Video editor">
-          <aside class="media-browser" aria-label="Media library">
+          <aside class="media-browser" id="mediaBrowser" aria-label="Media library">
             <div class="browser-top">
               <h2>Library</h2>
               <div class="browser-actions">
@@ -122,21 +97,49 @@
           ></div>
 
           <section class="stage" aria-label="Video preview and annotations">
-            <div class="preview-header">
-              <div>
-                <h2>Preview</h2>
-                <span>Frame-by-frame mechanics analysis</span>
-              </div>
-            </div>
-            <div class="stage-toolbar">
-              <label class="field mini">
-                Color
-                <input id="colorInput" type="color" value="#ff7a59" />
-              </label>
-              <label class="field thickness">
-                Thickness
-                <input id="widthInput" type="range" min="2" max="14" value="5" />
-              </label>
+            <div class="stage-toolbar" id="stageToolbar">
+              <aside class="tool-rail" id="toolRail" aria-label="Analysis tools">
+                <div class="brand-mark" aria-label="DiamondFrame">DF</div>
+                <button class="tool-button active" data-tool="draw" title="Draw freehand">
+                  <span aria-hidden="true">✎</span>
+                  <small>Draw</small>
+                </button>
+                <button class="tool-button" data-tool="line" title="Straight line">
+                  <span aria-hidden="true">╱</span>
+                  <small>Line</small>
+                </button>
+                <button class="tool-button" data-tool="arrow" title="Arrow">
+                  <span aria-hidden="true">↗</span>
+                  <small>Arrow</small>
+                </button>
+                <button class="tool-button" data-tool="circle" title="Circle">
+                  <span aria-hidden="true">○</span>
+                  <small>Circle</small>
+                </button>
+                <button class="tool-button" data-tool="text" title="Text note">
+                  <span aria-hidden="true">T</span>
+                  <small>Text</small>
+                </button>
+                <div class="rail-divider"></div>
+                <button class="tool-button" id="undoBtn" title="Undo annotation">
+                  <span aria-hidden="true">↶</span>
+                  <small>Undo</small>
+                </button>
+                <button class="tool-button danger" id="clearBtn" title="Delete annotations">
+                  <span aria-hidden="true">⌫</span>
+                  <small>Delete</small>
+                </button>
+                <div class="rail-drawing-controls" aria-label="Drawing style">
+                  <label class="rail-field rail-color">
+                    <span>Color</span>
+                    <input id="colorInput" type="color" value="#ff7a59" />
+                  </label>
+                  <label class="rail-field rail-thickness">
+                    <span>Thickness</span>
+                    <input id="widthInput" type="range" min="2" max="14" value="5" />
+                  </label>
+                </div>
+              </aside>
               <label class="toggle">
                 <input type="checkbox" id="syncToggle" />
                 Sync playback
@@ -223,7 +226,7 @@
             </div>
           </section>
 
-          <aside class="inspector" aria-label="Notes and saved frames">
+          <aside class="inspector" id="inspectorPanel" aria-label="Notes and saved frames">
             <div class="inspector-title">
               <h2>Inspector</h2>
               <div class="inspector-tabs" role="tablist" aria-label="Inspector sections">
@@ -277,12 +280,21 @@
               <h2>Dashboard</h2>
               <p>Projects, workspace settings, and billing for your private coach account.</p>
             </div>
+            <button
+              class="dashboard-menu-toggle"
+              id="dashboardMenuToggle"
+              type="button"
+              aria-controls="dashboardSideMenu"
+              aria-expanded="false"
+              aria-label="Open dashboard menu"
+            >
+              <span aria-hidden="true"></span>
+            </button>
           </header>
 
           <div class="dashboard-body">
-            <nav class="dashboard-side-menu" aria-label="Dashboard menu">
+            <nav class="dashboard-side-menu" id="dashboardSideMenu" aria-label="Dashboard menu">
               <button type="button" class="selected" data-dashboard-target="projects">Projects</button>
-              <button type="button" data-dashboard-target="settings">Settings</button>
               <button type="button" data-dashboard-target="billing">Billing</button>
               <button type="button" id="dashboardSideSignOutBtn">Sign Out</button>
             </nav>
@@ -299,28 +311,6 @@
                 <div class="dashboard-projects" id="dashboardProjects"></div>
               </section>
 
-              <section class="dashboard-panel settings-panel" id="dashboardSettingsPanel" data-dashboard-section="settings" hidden>
-                <div class="panel-heading">
-                  <h2>Settings</h2>
-                </div>
-                <label class="field">
-                  Default athlete
-                  <input id="defaultAthleteInput" placeholder="Add athlete name" />
-                </label>
-                <label class="field">
-                  Coach display name
-                  <input id="coachDisplayNameInput" placeholder="Add coach name" />
-                </label>
-                <label class="field">
-                  Report footer
-                  <input id="reportFooterInput" placeholder="Add report footer" />
-                </label>
-                <label class="toggle dashboard-toggle">
-                  <input type="checkbox" id="includeSavedFramesToggle" checked />
-                  Include saved frames in reports
-                </label>
-              </section>
-
               <section class="dashboard-panel billing-panel" id="dashboardBillingPanel" data-dashboard-section="billing" hidden>
                 <div class="panel-heading">
                   <h2>Billing</h2>
@@ -328,7 +318,8 @@
                 <section class="plan-card">
                   <span id="planLabel">Free workspace</span>
                   <strong id="accessLabel">10 Day Free Trial</strong>
-                  <button id="checkoutMonthlyBtn">Start Pro monthly - $12/mo</button>
+                  <p id="billingStatusMessage" class="billing-status" hidden></p>
+                  <button id="checkoutMonthlyBtn">Start Pro monthly - $6/mo</button>
                   <button id="checkoutAnnualBtn">Start Pro annual - $130/yr</button>
                   <button id="portalBtn" class="subtle">Billing portal</button>
                 </section>
@@ -346,6 +337,7 @@
       <input id="fileA" type="file" accept="video/*,image/*" multiple hidden />
       <input id="athleteInput" hidden />
       <input id="sessionInput" type="date" hidden />
+      <button class="mobile-panel-backdrop" id="mobilePanelBackdrop" type="button" aria-label="Close mobile panel" hidden></button>
     </div>
 
     <dialog id="authDialog" class="modal">
@@ -380,7 +372,7 @@
           </article>
           <article class="featured">
             <h3>Pro Coach</h3>
-            <strong>$12/mo or $130/yr</strong>
+            <strong>$6/mo or $130/yr</strong>
             <p>Compare mode, unlimited uploads, reports, image sets, and exports.</p>
             <button id="pricingMonthlyBtn" class="primary-button accent" value="checkout">Monthly</button>
             <button id="pricingAnnualBtn" class="primary-button accent" value="checkout">Annual</button>
@@ -439,6 +431,25 @@
           <button class="primary-button danger-button" id="confirmDeleteMediaBtn" type="submit">Delete Footage</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="mediaPreviewDialog" class="modal media-preview-dialog">
+      <div class="modal-card media-preview-modal">
+        <button class="close-button" type="button" data-close="mediaPreviewDialog" aria-label="Close">x</button>
+        <h2 id="mediaPreviewTitle">Media Preview</h2>
+        <div class="media-preview-frame">
+          <video id="mediaPreviewVideo" controls playsinline></video>
+          <img id="mediaPreviewImage" alt="" hidden />
+          <p id="mediaPreviewUnavailable" hidden>Preview unavailable for this file.</p>
+        </div>
+        <div class="modal-actions media-preview-actions">
+          <button class="ghost-button danger-button" id="previewDeleteMediaBtn" type="button">Delete</button>
+          <span>
+            <button class="primary-button" id="previewUseVideoOneBtn" type="button">Add to Video 1</button>
+            <button class="primary-button" id="previewUseVideoTwoBtn" type="button">Add to Video 2</button>
+          </span>
+        </div>
+      </div>
     </dialog>
 
     <dialog id="savedFrameEditDialog" class="modal">

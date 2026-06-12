@@ -6,6 +6,7 @@ const supabaseBrowserKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
   || import.meta.env.VITE_SUPABASE_ANON_KEY;
 const supabase = supabaseUrl && supabaseBrowserKey ? createClient(supabaseUrl, supabaseBrowserKey) : null;
 const proSubscriptionStatuses = new Set(["pro", "active", "trialing"]);
+const workspaceLockedMessage = "Choose a plan to unlock your workspace.";
 
 const state = {
   tool: "draw",
@@ -47,6 +48,7 @@ const state = {
   comparing: false,
   pendingDeleteProjectId: null,
   pendingDeleteMediaId: null,
+  previewMediaId: null,
   videoView: "primary",
   primaryMediaId: null,
   compareMediaId: null,
@@ -411,6 +413,7 @@ function loadMedia(media, video, emptyEl, options = {}) {
 }
 
 async function importMediaFile(file) {
+  if (!requireWorkspaceAccess()) return;
   if (!file) return;
   const media = {
     id: crypto.randomUUID(),
@@ -462,9 +465,11 @@ async function saveImportedMediaToSupabase(media) {
     player_id: state.selectedProjectId,
     storage_path: storagePath,
     original_filename: media.file.name || "Imported media",
+    local_file_name: media.file.name || null,
     drill_type: "hitting",
     source: "library",
     mime_type: media.file.type || null,
+    file_size_bytes: media.file.size || null,
     metadata: {
       kind: media.kind,
       uploaded_at: new Date().toISOString()
@@ -483,6 +488,8 @@ async function saveImportedMediaToSupabase(media) {
 
   media.storagePath = storagePath;
   media.url = await getSignedStorageUrl(storageBuckets.videos, storagePath);
+  media.syncError = false;
+  media.syncMessage = "Synced to Supabase Storage";
   return { ok: true };
 }
 
@@ -561,10 +568,10 @@ async function loadProjectMediaFromSupabase(localMedia = []) {
 
   if (error) {
     console.warn("Could not load project media from Supabase", error.message);
-    return [];
+    return localMedia;
   }
 
-  return Promise.all((data || []).map(async (row) => ({
+  const remoteMedia = await Promise.all((data || []).map(async (row) => ({
     id: row.id,
     projectId: row.player_id,
     storagePath: row.storage_path,
@@ -575,6 +582,9 @@ async function loadProjectMediaFromSupabase(localMedia = []) {
     createdAt: row.created_at,
     url: await getSignedStorageUrl(storageBuckets.videos, row.storage_path)
   })));
+  const remoteIds = new Set(remoteMedia.map((media) => media.id));
+  const unsyncedLocalMedia = localMedia.filter((media) => media.file && !remoteIds.has(media.id));
+  return [...unsyncedLocalMedia, ...remoteMedia];
 }
 
 function getLibraryMedia(id) {
@@ -582,6 +592,7 @@ function getLibraryMedia(id) {
 }
 
 function assignMediaToPane(media, pane, options = {}) {
+  if (!options.restoreSession && !requireWorkspaceAccess()) return;
   if (!media) return;
   if (pane === "comparison" && !getMediaMimeType(media).startsWith("video/")) {
     alert("Comparison supports video files. Drag a video from the Library into this window.");
@@ -664,8 +675,77 @@ function openDeleteMediaDialog(mediaId) {
   if (!media) return;
   state.pendingDeleteMediaId = mediaId;
   const copy = $("#deleteMediaCopy");
-  if (copy) copy.textContent = `Delete "${getMediaName(media)}" from this project? This removes it from the Library and synced storage.`;
+  if (copy) copy.textContent = `Delete "${getMediaName(media)}" from this project? This removes it from the Library.`;
   $("#deleteMediaDialog")?.showModal();
+}
+
+function clearMediaPreview() {
+  const previewVideo = $("#mediaPreviewVideo");
+  const previewImage = $("#mediaPreviewImage");
+  const unavailable = $("#mediaPreviewUnavailable");
+  if (previewVideo) {
+    previewVideo.pause();
+    previewVideo.removeAttribute("src");
+    previewVideo.hidden = false;
+    previewVideo.load();
+  }
+  if (previewImage) {
+    previewImage.removeAttribute("src");
+    previewImage.hidden = true;
+  }
+  if (unavailable) unavailable.hidden = true;
+}
+
+function openMediaPreviewDialog(mediaId) {
+  const media = getLibraryMedia(mediaId);
+  const dialog = $("#mediaPreviewDialog");
+  if (!media || !dialog) return;
+  state.previewMediaId = mediaId;
+  const title = $("#mediaPreviewTitle");
+  const previewVideo = $("#mediaPreviewVideo");
+  const previewImage = $("#mediaPreviewImage");
+  const unavailable = $("#mediaPreviewUnavailable");
+  const useVideoTwoButton = $("#previewUseVideoTwoBtn");
+  const mimeType = getMediaMimeType(media);
+  const sourceUrl = getMediaSourceUrl(media);
+
+  clearMediaPreview();
+  if (title) title.textContent = getMediaName(media);
+  if (useVideoTwoButton) {
+    useVideoTwoButton.disabled = !mimeType.startsWith("video/");
+    useVideoTwoButton.title = useVideoTwoButton.disabled ? "Video 2 requires a video file." : "";
+  }
+
+  if (mimeType.startsWith("image/") && previewImage) {
+    previewImage.src = sourceUrl;
+    previewImage.alt = getMediaName(media);
+    previewImage.hidden = false;
+    if (previewVideo) previewVideo.hidden = true;
+  } else if (mimeType.startsWith("video/") && previewVideo) {
+    previewVideo.src = sourceUrl;
+    previewVideo.hidden = false;
+    previewVideo.load();
+  } else if (unavailable) {
+    if (previewVideo) previewVideo.hidden = true;
+    unavailable.hidden = false;
+  }
+
+  dialog.showModal();
+}
+
+function assignPreviewMedia(pane) {
+  const media = getLibraryMedia(state.previewMediaId);
+  if (!media) return;
+  assignMediaToPane(media, pane);
+  $("#mediaPreviewDialog")?.close();
+  closeMobileDrawers();
+}
+
+function deletePreviewMedia() {
+  const mediaId = state.previewMediaId;
+  if (!mediaId) return;
+  $("#mediaPreviewDialog")?.close();
+  openDeleteMediaDialog(mediaId);
 }
 
 async function confirmMediaDelete(event) {
@@ -1116,6 +1196,7 @@ function evaluationPdfSection(title, items = []) {
 }
 
 function exportEvaluationPdf() {
+  if (!requireWorkspaceAccess()) return;
   const evaluation = getEditingEvaluation();
   if (!evaluation) {
     alert("Open an evaluation before exporting.");
@@ -1165,22 +1246,43 @@ function exportEvaluationPdf() {
     ${evaluationPdfSection("Drills", result.drills)}
   </main>
   <footer>${escapeHtml(result.disclaimer || "AI feedback is coaching guidance only and is not a medical diagnosis.")}</footer>
-  <script>
-    document.title = ${JSON.stringify(filename)};
-    window.addEventListener("load", () => {
-      window.print();
-    });
-  </script>
 </body>
 </html>`;
-  const printWindow = window.open("", "_blank", "noopener,noreferrer");
-  if (!printWindow) {
-    alert("Allow popups for this site to export the evaluation PDF.");
+  printHtmlDocument(html, filename);
+}
+
+function printHtmlDocument(html, filename) {
+  document.querySelectorAll(".print-export-frame").forEach((frame) => frame.remove());
+  const frame = document.createElement("iframe");
+  frame.className = "print-export-frame";
+  frame.title = filename;
+  frame.setAttribute("aria-hidden", "true");
+  frame.style.position = "fixed";
+  frame.style.right = "0";
+  frame.style.bottom = "0";
+  frame.style.width = "0";
+  frame.style.height = "0";
+  frame.style.border = "0";
+  frame.style.opacity = "0";
+  document.body.append(frame);
+
+  const frameWindow = frame.contentWindow;
+  const frameDocument = frame.contentDocument || frameWindow?.document;
+  if (!frameWindow || !frameDocument) {
+    alert("Your browser could not start the PDF export. Please try again.");
+    frame.remove();
     return;
   }
-  printWindow.document.open();
-  printWindow.document.write(html);
-  printWindow.document.close();
+
+  frameDocument.open();
+  frameDocument.write(html);
+  frameDocument.close();
+  frameDocument.title = filename;
+  window.setTimeout(() => {
+    frameWindow.focus();
+    frameWindow.print();
+    window.setTimeout(() => frame.remove(), 60000);
+  }, 150);
 }
 
 function renderAiResultMarkup(result, options = {}) {
@@ -1251,6 +1353,7 @@ function analysisErrorResult(message) {
 }
 
 async function runAiAnalysis() {
+  if (!requireWorkspaceAccess()) return;
   if (state.analyzing) return;
   const aiCoachFrames = getAiCoachFrameSamples();
   const frames = aiCoachFrames.length
@@ -1303,6 +1406,7 @@ async function runAiAnalysis() {
 }
 
 function captureFrame() {
+  if (!requireWorkspaceAccess()) return;
   if (state.stillImage) return;
   if (!videoA.src) return;
   const rect = captureCanvas.getBoundingClientRect();
@@ -1367,31 +1471,43 @@ function addImportedMediaItem(media, isActive = false) {
   item.role = "button";
   item.draggable = true;
   item.dataset.mediaId = media.id;
-  item.setAttribute("aria-label", `Select ${getMediaName(media)}. Drag into a video window.`);
-  const thumb = document.createElement("span");
-  thumb.className = "media-thumb imported";
+  item.setAttribute("aria-label", `Select ${getMediaName(media)}. Double-click to preview or drag into a video window.`);
   const copy = document.createElement("span");
   copy.className = "media-copy";
   const title = document.createElement("strong");
   title.textContent = getMediaName(media);
-  const meta = document.createElement("small");
-  const syncStatus = media.uploading ? "Syncing..." : media.syncError ? "Sync failed · local only" : "Drag to a window";
-  meta.textContent = `${media.kind} · ${syncStatus}`;
-  if (media.syncMessage) meta.title = media.syncMessage;
+  const actions = document.createElement("span");
+  actions.className = "media-row-actions";
   const deleteButton = document.createElement("button");
-  deleteButton.className = "media-delete-button";
+  deleteButton.className = "media-row-button media-row-delete";
   deleteButton.type = "button";
   deleteButton.textContent = "Delete";
   deleteButton.setAttribute("aria-label", `Delete ${getMediaName(media)} from library`);
-  copy.append(title, meta);
-  item.append(thumb, copy, deleteButton);
+  const useVideoOneButton = document.createElement("button");
+  useVideoOneButton.className = "media-row-button";
+  useVideoOneButton.type = "button";
+  useVideoOneButton.textContent = "Video 1";
+  useVideoOneButton.setAttribute("aria-label", `Add ${getMediaName(media)} to Video 1`);
+  const useVideoTwoButton = document.createElement("button");
+  useVideoTwoButton.className = "media-row-button";
+  useVideoTwoButton.type = "button";
+  useVideoTwoButton.textContent = "Video 2";
+  useVideoTwoButton.setAttribute("aria-label", `Add ${getMediaName(media)} to Video 2`);
+  if (!getMediaMimeType(media).startsWith("video/")) {
+    useVideoTwoButton.disabled = true;
+    useVideoTwoButton.title = "Video 2 requires a video file.";
+  }
+  copy.append(title);
+  actions.append(deleteButton, useVideoOneButton, useVideoTwoButton);
+  item.append(copy, actions);
   item.addEventListener("click", () => {
     document.querySelectorAll(".media-item").forEach((el) => el.classList.toggle("active", el === item));
   });
+  item.addEventListener("dblclick", () => openMediaPreviewDialog(media.id));
   item.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
-    document.querySelectorAll(".media-item").forEach((el) => el.classList.toggle("active", el === item));
+    openMediaPreviewDialog(media.id);
   });
   item.addEventListener("dragstart", (event) => {
     event.dataTransfer.setData("text/plain", media.id);
@@ -1400,6 +1516,16 @@ function addImportedMediaItem(media, isActive = false) {
   deleteButton.addEventListener("click", (event) => {
     event.stopPropagation();
     openDeleteMediaDialog(media.id);
+  });
+  useVideoOneButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    assignMediaToPane(media, "original");
+    closeMobileDrawers();
+  });
+  useVideoTwoButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    assignMediaToPane(media, "comparison");
+    closeMobileDrawers();
   });
   library.append(item);
 }
@@ -1955,6 +2081,7 @@ function renderProjectNotes() {
 }
 
 function saveProjectNote() {
+  if (!requireWorkspaceAccess()) return;
   const input = $("#notesInput");
   const text = input?.value.trim();
   if (!text) return;
@@ -1978,6 +2105,7 @@ function openMechanicsNoteEditor(noteId) {
 }
 
 function saveEditingMechanicsNote() {
+  if (!requireWorkspaceAccess()) return;
   const note = state.projectNotes.find((item) => item.id === state.editingNoteId);
   if (!note) return;
   note.text = $("#mechanicsNoteEditInput")?.value.trim() || "";
@@ -2006,6 +2134,7 @@ function persistCurrentProjectWorkspace() {
 }
 
 async function saveAnnotatedFrame() {
+  if (!requireWorkspaceAccess()) return null;
   const target = getActiveSaveTarget();
   const baseCanvas = makeSnapshotCanvas(target, false);
   const annotatedCanvas = makeSnapshotCanvas(target, true);
@@ -2055,6 +2184,7 @@ function getEditingFrame() {
 }
 
 function persistCurrentFrameEdit() {
+  if (state.user && !hasWorkspaceAccess()) return;
   const frame = getEditingFrame();
   if (!frame || !state.frameStillImage) return;
 
@@ -2091,6 +2221,7 @@ function deleteEditingFrame() {
 }
 
 function saveComparisonFrame() {
+  if (!requireWorkspaceAccess()) return;
   saveAnnotatedFrame();
 }
 
@@ -2138,6 +2269,7 @@ function renderSavedFrames() {
 }
 
 function loadSavedFrame(frame) {
+  if (!requireWorkspaceAccess()) return;
   if (!frame?.image) return;
   persistCurrentFrameEdit();
   state.editingFrameId = frame.id;
@@ -2162,11 +2294,16 @@ function loadSavedFrame(frame) {
 }
 
 function openSavedFrameEditor(frame) {
+  if (!requireWorkspaceAccess()) return;
   loadSavedFrame(frame);
   $("#savedFrameEditDialog")?.showModal();
 }
 
 function setVideoView(view) {
+  if (state.user && !hasWorkspaceAccess() && view !== "primary") {
+    requireWorkspaceAccess();
+    return;
+  }
   if (state.videoView === "frame" && view !== "frame") persistCurrentFrameEdit();
   state.videoView = view;
   state.comparing = view === "split";
@@ -2181,6 +2318,7 @@ function setVideoView(view) {
   layout.classList.toggle("comparing", state.comparing);
   layout.classList.toggle("compare-only", isCompareOnly);
   layout.classList.toggle("frame-only", isFrameView);
+  app.classList.toggle("primary-only-shell", view === "primary");
   app.classList.toggle("comparing-shell", state.comparing);
   app.classList.toggle("compare-only-shell", isCompareOnly);
   app.classList.toggle("frame-shell", isFrameView);
@@ -2195,12 +2333,17 @@ function setVideoView(view) {
 }
 
 function setCompareMode(force = !state.comparing) {
+  if (!requireWorkspaceAccess()) return;
   setVideoView(force ? "split" : "primary");
 }
 
 function setupPaneDropTarget(pane, target) {
   pane.addEventListener("dragover", (event) => {
     event.preventDefault();
+    if (!hasWorkspaceAccess()) {
+      event.dataTransfer.dropEffect = "none";
+      return;
+    }
     event.dataTransfer.dropEffect = "copy";
     pane.classList.add("drag-over");
   });
@@ -2210,34 +2353,84 @@ function setupPaneDropTarget(pane, target) {
   pane.addEventListener("drop", (event) => {
     event.preventDefault();
     pane.classList.remove("drag-over");
+    if (!requireWorkspaceAccess()) return;
     assignMediaToPane(getLibraryMedia(event.dataTransfer.getData("text/plain")), target);
   });
 }
 
 function updateAccess() {
-  const isPro = isProSubscription(state.subscription);
+  const hasAccess = hasWorkspaceAccess();
   const planLabel = $("#planLabel");
   const accessLabel = $("#accessLabel");
-  if (planLabel) planLabel.textContent = isPro ? "Pro Coach" : "Free workspace";
-  if (accessLabel) accessLabel.textContent = isPro ? "Compare, reports, exports, and unlimited uploads enabled" : "10 Day Free Trial";
+  if (planLabel) planLabel.textContent = hasAccess ? "Pro Coach" : "Choose a plan to unlock your workspace";
+  if (accessLabel) accessLabel.textContent = hasAccess
+    ? "Compare, reports, exports, and unlimited uploads enabled"
+    : "Start monthly or annual access to create projects and use analysis tools";
   const authBtn = $("#authBtn");
   if (authBtn) authBtn.textContent = state.user ? state.user.email : "Log in";
+  syncWorkspaceGateUI();
   const authPage = $("#authPage");
   const app = $("#app");
   if (authPage && app) {
     authPage.hidden = Boolean(state.user);
     app.hidden = !state.user;
+    syncDocumentModeClasses();
     if (state.user) requestAnimationFrame(resizeCanvases);
   }
+}
+
+function syncDocumentModeClasses() {
+  const app = $("#app");
+  const isEditorActive = Boolean(app && !app.hidden && !app.classList.contains("dashboard-mode"));
+  document.body.classList.toggle("editor-document-active", isEditorActive);
 }
 
 function isProSubscription(status) {
   return proSubscriptionStatuses.has(String(status || "").toLowerCase());
 }
 
+function hasWorkspaceAccess() {
+  return isProSubscription(state.subscription);
+}
+
+function setBillingStatusMessage(message = "") {
+  const messageEl = $("#billingStatusMessage");
+  if (!messageEl) return;
+  messageEl.textContent = message;
+  messageEl.hidden = !message;
+}
+
+function syncWorkspaceGateUI() {
+  const shouldLock = Boolean(state.user) && !hasWorkspaceAccess();
+  document.querySelectorAll('[data-dashboard-target="projects"]').forEach((button) => {
+    button.disabled = shouldLock;
+  });
+  ["#editorNavBtn", "#newProjectBtn", "#uploadBtn", "#compareBtn", "#exportBtn", "#evaluationExportBtn"].forEach((selector) => {
+    const button = $(selector);
+    if (button) button.disabled = shouldLock;
+  });
+  document.querySelector("[data-action='compare']")?.toggleAttribute("disabled", shouldLock);
+  document.querySelectorAll("[data-open-editor]").forEach((button) => {
+    button.disabled = shouldLock;
+  });
+}
+
+function requireWorkspaceAccess(message = workspaceLockedMessage) {
+  if (!state.user || hasWorkspaceAccess()) return true;
+  setBillingStatusMessage(message);
+  setDashboardSection("billing");
+  setView("dashboard");
+  updateAccess();
+  return false;
+}
+
 async function refreshSubscriptionStatus() {
-  if (!supabase || !state.user?.id) {
+  if (!supabase) {
     state.subscription = localStorage.getItem("diamondframe.subscription") || "free";
+    return;
+  }
+  if (!state.user?.id) {
+    state.subscription = "free";
     return;
   }
 
@@ -2249,12 +2442,34 @@ async function refreshSubscriptionStatus() {
 
   if (error) {
     console.warn("Could not load subscription status", error.message);
-    state.subscription = localStorage.getItem("diamondframe.subscription") || "free";
+    state.subscription = "free";
     return;
   }
 
   state.subscription = data?.subscription_status || "free";
+  if (!isProSubscription(state.subscription)) {
+    await reconcileSubscriptionStatus();
+  }
   localStorage.setItem("diamondframe.subscription", state.subscription);
+}
+
+async function reconcileSubscriptionStatus() {
+  const token = await getAccessToken();
+  if (!token) return;
+
+  try {
+    const response = await fetch("/api/refresh-subscription-status", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Subscription sync failed");
+    state.subscription = data.subscription_status || state.subscription || "free";
+  } catch (error) {
+    console.warn("Could not reconcile Stripe subscription status", error.message);
+  }
 }
 
 function setAuthPageMode(mode) {
@@ -2339,11 +2554,17 @@ async function submitAuthPage(event) {
       return;
     }
     const user = result.data.session.user || result.data.user;
-    if (user) await completeAuth(user, email);
+    if (user) {
+      await completeAuth(user, email, {
+        dashboardSection: mode === "signup" ? "billing" : "projects"
+      });
+    }
     return;
   }
 
-  await completeAuth(email);
+  await completeAuth(email, "", {
+    dashboardSection: mode === "signup" ? "billing" : "projects"
+  });
 }
 
 function getFallbackUser(email) {
@@ -2359,7 +2580,7 @@ function getSupabaseUser(authUser, email) {
     : getFallbackUser(email);
 }
 
-async function completeAuth(authUserOrEmail, fallbackEmail = "") {
+async function completeAuth(authUserOrEmail, fallbackEmail = "", options = {}) {
   const email = typeof authUserOrEmail === "string"
     ? authUserOrEmail
     : authUserOrEmail?.email || fallbackEmail;
@@ -2369,8 +2590,20 @@ async function completeAuth(authUserOrEmail, fallbackEmail = "") {
   localStorage.setItem("diamondframe.user", JSON.stringify(state.user));
   await refreshSubscriptionStatus();
   await loadProjectsFromSupabase();
+  if (options.checkoutStatus === "success" && !hasWorkspaceAccess()) {
+    setBillingStatusMessage("Payment is processing. Refresh in a moment if your plan does not unlock automatically.");
+  } else if (options.checkoutStatus === "cancelled") {
+    setBillingStatusMessage("Checkout was cancelled. Choose a plan to unlock your workspace.");
+  } else if (!hasWorkspaceAccess()) {
+    setBillingStatusMessage(workspaceLockedMessage);
+  } else {
+    setBillingStatusMessage("");
+  }
   updateAccess();
-  setDashboardSection("projects");
+  const preferredSection = options.checkoutStatus === "success" && hasWorkspaceAccess()
+    ? "projects"
+    : options.dashboardSection || "projects";
+  setDashboardSection(preferredSection);
   setView("dashboard");
 }
 
@@ -2567,13 +2800,14 @@ function getSelectedProject() {
 
 function updateProjectChrome() {
   const selectedProject = getSelectedProject();
-  const title = selectedProject?.athlete || "New Project";
-  $(".topbar h1").textContent = title;
+  const title = $(".topbar h1");
+  if (title) title.textContent = selectedProject?.athlete || "New Project";
   const athleteInput = $("#athleteInput");
   if (athleteInput) athleteInput.value = selectedProject?.athlete || "";
 }
 
 async function selectProject(projectId, { openEditor = false } = {}) {
+  if (openEditor && !requireWorkspaceAccess()) return;
   if (projectId === state.selectedProjectId) {
     if (state.workspaceProjectId !== projectId) await loadProjectWorkspace();
     if (openEditor) setView("editor");
@@ -2754,6 +2988,7 @@ async function removeProject(projectId) {
 }
 
 function openNewProjectDialog() {
+  if (!requireWorkspaceAccess()) return;
   const form = $("#newProjectForm");
   if (form) form.reset();
   $("#projectDialogTitle").textContent = "New Project";
@@ -2765,6 +3000,7 @@ function openNewProjectDialog() {
 
 async function submitNewProject(event) {
   event.preventDefault();
+  if (!requireWorkspaceAccess()) return;
   const formData = new FormData(event.currentTarget);
   const athlete = String(formData.get("athlete") || "").trim();
   if (!athlete) return;
@@ -2791,7 +3027,11 @@ async function submitNewProject(event) {
 }
 
 function setDashboardSection(section) {
-  const targetSection = section || "projects";
+  let targetSection = section || "projects";
+  if (state.user && !hasWorkspaceAccess() && targetSection !== "billing") {
+    targetSection = "billing";
+    setBillingStatusMessage(workspaceLockedMessage);
+  }
   document.querySelectorAll("[data-dashboard-target]").forEach((button) => {
     button.classList.toggle("selected", button.dataset.dashboardTarget === targetSection);
     button.setAttribute("aria-pressed", String(button.dataset.dashboardTarget === targetSection));
@@ -2799,15 +3039,18 @@ function setDashboardSection(section) {
   document.querySelectorAll("[data-dashboard-section]").forEach((panel) => {
     panel.hidden = panel.dataset.dashboardSection !== targetSection;
   });
+  setDashboardMenuOpen(false);
 }
 
 async function signOutDashboard() {
   persistCurrentProjectWorkspace();
-  if (supabase) await supabase.auth.signOut();
-  state.user = null;
-  localStorage.removeItem("diamondframe.user");
-  setAuthPageMode("login");
-  updateAccess();
+  closeMobileDrawers();
+  await requireFreshLogin();
+  if (supabase) {
+    supabase.auth.signOut().catch((error) => {
+      console.warn("Could not complete Supabase sign out", error.message);
+    });
+  }
 }
 
 async function startCheckout(plan = "monthly") {
@@ -2845,6 +3088,7 @@ async function openPortal() {
 }
 
 function exportReport() {
+  if (!requireWorkspaceAccess()) return;
   if (!state.savedFrames.length) {
     alert("Save at least one frame before exporting.");
     return;
@@ -2896,7 +3140,14 @@ function exportReport() {
 }
 
 function setView(view) {
-  const isDashboard = view === "dashboard";
+  closeMobileDrawers();
+  let targetView = view;
+  if (state.user && !hasWorkspaceAccess() && targetView !== "dashboard") {
+    setBillingStatusMessage(workspaceLockedMessage);
+    setDashboardSection("billing");
+    targetView = "dashboard";
+  }
+  const isDashboard = targetView === "dashboard";
   if (isDashboard) {
     persistCurrentFrameEdit();
     saveCurrentProjectSession();
@@ -2907,10 +3158,12 @@ function setView(view) {
   $("#dashboardView").hidden = !isDashboard;
   $("#editorNavBtn").classList.toggle("active-view", !isDashboard);
   $("#dashboardNavBtn").classList.toggle("active-view", isDashboard);
+  syncDocumentModeClasses();
   if (!isDashboard) requestAnimationFrame(resizeCanvases);
 }
 
 async function openSelectedProjectEditor() {
+  if (!requireWorkspaceAccess()) return;
   if (state.selectedProjectId && state.workspaceProjectId !== state.selectedProjectId) {
     await loadProjectWorkspace();
   }
@@ -2924,7 +3177,6 @@ async function getAccessToken() {
 }
 
 async function requireFreshLogin() {
-  if (supabase) await supabase.auth.signOut();
   state.user = null;
   state.subscription = "free";
   state.projects = [];
@@ -2943,6 +3195,96 @@ async function requireFreshLogin() {
   renderDashboardProjects();
   updateProjectChrome();
   updateAccess();
+}
+
+function getCheckoutReturnStatus() {
+  return new URLSearchParams(window.location.search).get("checkout");
+}
+
+function syncMobileBackdrop() {
+  const app = $("#app");
+  const backdrop = $("#mobilePanelBackdrop");
+  if (!app || !backdrop) return;
+  const isOpen = app.classList.contains("mobile-library-open")
+    || app.classList.contains("mobile-inspector-open")
+    || app.classList.contains("mobile-tools-open")
+    || app.classList.contains("mobile-dashboard-menu-open");
+  backdrop.hidden = !isOpen;
+}
+
+function updateMobilePanelButtons(activePanel = null) {
+  document.querySelectorAll("[data-mobile-panel]").forEach((button) => {
+    const selected = button.dataset.mobilePanel === activePanel;
+    button.classList.toggle("selected", selected);
+    button.setAttribute("aria-expanded", String(selected));
+  });
+}
+
+function updateMobileToolsToggle(isOpen = false) {
+  const button = $("#mobileToolsToggle");
+  if (!button) return;
+  button.classList.toggle("selected", isOpen);
+  button.setAttribute("aria-expanded", String(isOpen));
+  button.setAttribute("aria-label", isOpen ? "Close analysis tools" : "Open analysis tools");
+}
+
+function updateDashboardMenuToggle(isOpen = false) {
+  const button = $("#dashboardMenuToggle");
+  if (!button) return;
+  button.classList.toggle("selected", isOpen);
+  button.setAttribute("aria-expanded", String(isOpen));
+  button.setAttribute("aria-label", isOpen ? "Close dashboard menu" : "Open dashboard menu");
+}
+
+function closeMobileDrawers() {
+  const app = $("#app");
+  if (!app) return;
+  app.classList.remove("mobile-library-open", "mobile-inspector-open", "mobile-tools-open", "mobile-dashboard-menu-open");
+  updateMobilePanelButtons(null);
+  updateMobileToolsToggle(false);
+  updateDashboardMenuToggle(false);
+  syncMobileBackdrop();
+}
+
+function setMobilePanel(panel = null) {
+  const app = $("#app");
+  const nextPanel = panel === "library" || panel === "inspector" ? panel : null;
+  if (!app) return;
+
+  app.classList.toggle("mobile-library-open", nextPanel === "library");
+  app.classList.toggle("mobile-inspector-open", nextPanel === "inspector");
+  if (nextPanel) app.classList.remove("mobile-tools-open", "mobile-dashboard-menu-open");
+
+  updateMobilePanelButtons(nextPanel);
+  updateMobileToolsToggle(false);
+  updateDashboardMenuToggle(false);
+  syncMobileBackdrop();
+}
+
+function setMobileToolsOpen(shouldOpen = false) {
+  const app = $("#app");
+  if (!app) return;
+  app.classList.toggle("mobile-tools-open", shouldOpen);
+  if (shouldOpen) {
+    app.classList.remove("mobile-library-open", "mobile-inspector-open", "mobile-dashboard-menu-open");
+    updateMobilePanelButtons(null);
+    updateDashboardMenuToggle(false);
+  }
+  updateMobileToolsToggle(shouldOpen);
+  syncMobileBackdrop();
+}
+
+function setDashboardMenuOpen(shouldOpen = false) {
+  const app = $("#app");
+  if (!app) return;
+  app.classList.toggle("mobile-dashboard-menu-open", shouldOpen);
+  if (shouldOpen) {
+    app.classList.remove("mobile-library-open", "mobile-inspector-open", "mobile-tools-open");
+    updateMobilePanelButtons(null);
+    updateMobileToolsToggle(false);
+  }
+  updateDashboardMenuToggle(shouldOpen);
+  syncMobileBackdrop();
 }
 
 document.querySelectorAll("[data-tool]").forEach((button) => {
@@ -2970,6 +3312,31 @@ document.querySelectorAll("[data-inspector-tab]").forEach((button) => {
   });
 });
 
+document.querySelectorAll("[data-mobile-panel]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const panel = button.dataset.mobilePanel;
+    const app = $("#app");
+    const isOpen = app?.classList.contains(`mobile-${panel}-open`);
+    setMobilePanel(isOpen ? null : panel);
+  });
+});
+
+$("#mobileToolsToggle")?.addEventListener("click", () => {
+  const app = $("#app");
+  setMobileToolsOpen(!app?.classList.contains("mobile-tools-open"));
+});
+
+$("#dashboardMenuToggle")?.addEventListener("click", () => {
+  const app = $("#app");
+  setDashboardMenuOpen(!app?.classList.contains("mobile-dashboard-menu-open"));
+});
+
+$("#mobilePanelBackdrop")?.addEventListener("click", closeMobileDrawers);
+
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeMobileDrawers();
+});
+
 $("#aiAnalyzeBtn").addEventListener("click", runAiAnalysis);
 document.querySelectorAll("[data-auth-mode]").forEach((button) => {
   button.addEventListener("click", () => setAuthPageMode(button.dataset.authMode));
@@ -2979,7 +3346,13 @@ $("#backToLoginBtn")?.addEventListener("click", () => setAuthPageMode("login"));
 $("#authPageForm")?.addEventListener("submit", submitAuthPage);
 
 function setupAnnotationCanvas(canvas, target) {
+  const cancelCanvasGesture = (event) => {
+    if (event.cancelable) event.preventDefault();
+  };
+
   canvas.addEventListener("pointerdown", (event) => {
+    cancelCanvasGesture(event);
+    if (!requireWorkspaceAccess()) return;
     if (target === "original" && !state.captured) captureFrame();
     state.drawingTarget = target;
     state.drawing = true;
@@ -2990,6 +3363,7 @@ function setupAnnotationCanvas(canvas, target) {
 
   canvas.addEventListener("pointermove", (event) => {
     if (!state.drawing || state.drawingTarget !== target) return;
+    cancelCanvasGesture(event);
     const point = getPoint(event, canvas);
     if (state.tool === "draw") {
       state.currentPath.push(point);
@@ -3001,6 +3375,7 @@ function setupAnnotationCanvas(canvas, target) {
 
   canvas.addEventListener("pointerup", (event) => {
     if (!state.drawing || state.drawingTarget !== target) return;
+    cancelCanvasGesture(event);
     const point = getPoint(event, canvas);
     const annotations = getAnnotationSurface(target).annotations;
     state.drawing = false;
@@ -3017,14 +3392,20 @@ function setupAnnotationCanvas(canvas, target) {
     scheduleProjectSessionAutosave();
   });
 
-  canvas.addEventListener("pointercancel", () => {
+  canvas.addEventListener("pointercancel", (event) => {
     if (state.drawingTarget !== target) return;
+    cancelCanvasGesture(event);
     state.drawing = false;
     redraw(target);
   });
 
   canvas.addEventListener("click", () => {
     state.drawingTarget = target;
+  });
+
+  canvas.addEventListener("contextmenu", cancelCanvasGesture);
+  ["touchstart", "touchmove", "touchend", "touchcancel"].forEach((eventName) => {
+    canvas.addEventListener(eventName, cancelCanvasGesture, { passive: false });
   });
 }
 
@@ -3033,11 +3414,19 @@ setupAnnotationCanvas(compareAnnotationCanvas, "comparison");
 setupAnnotationCanvas(frameAnnotationCanvas, "frame");
 
 fileA.addEventListener("change", () => {
+  if (!requireWorkspaceAccess()) {
+    fileA.value = "";
+    return;
+  }
   [...fileA.files].forEach(importMediaFile);
   fileA.value = "";
 });
-$("#uploadBtn").addEventListener("click", () => fileA.click());
-$("#emptyB").addEventListener("click", () => setVideoView("compare"));
+$("#uploadBtn").addEventListener("click", () => {
+  if (requireWorkspaceAccess()) fileA.click();
+});
+$("#emptyB").addEventListener("click", () => {
+  if (requireWorkspaceAccess()) setVideoView("compare");
+});
 document.querySelector('[data-action="compare"]')?.addEventListener("click", () => setCompareMode());
 $("#compareBtn")?.addEventListener("click", () => setCompareMode());
 document.querySelectorAll("[data-video-view]").forEach((button) => {
@@ -3172,12 +3561,20 @@ $("#deleteMediaForm")?.addEventListener("submit", confirmMediaDelete);
 $("#deleteMediaDialog")?.addEventListener("close", () => {
   state.pendingDeleteMediaId = null;
 });
+$("#mediaPreviewDialog")?.addEventListener("close", () => {
+  state.previewMediaId = null;
+  clearMediaPreview();
+});
+$("#previewUseVideoOneBtn")?.addEventListener("click", () => assignPreviewMedia("original"));
+$("#previewUseVideoTwoBtn")?.addEventListener("click", () => assignPreviewMedia("comparison"));
+$("#previewDeleteMediaBtn")?.addEventListener("click", deletePreviewMedia);
 document.querySelectorAll("[data-dashboard-target]").forEach((button) => {
   button.setAttribute("aria-pressed", String(button.classList.contains("selected")));
   button.addEventListener("click", () => setDashboardSection(button.dataset.dashboardTarget));
 });
 $("#dashboardSideSignOutBtn")?.addEventListener("click", signOutDashboard);
 $("#dashboardUploadBtn")?.addEventListener("click", () => {
+  if (!requireWorkspaceAccess()) return;
   openSelectedProjectEditor().then(() => fileA.click());
 });
 document.querySelectorAll("[data-open-editor]").forEach((button) => {
@@ -3237,23 +3634,46 @@ $("#authForm").addEventListener("submit", async (event) => {
       return;
     }
     const user = result.data.session.user || result.data.user;
-    await completeAuth(user, email);
+    await completeAuth(user, email, {
+      dashboardSection: action === "signup" ? "billing" : "projects"
+    });
     $("#authDialog").close();
     return;
   }
 
-  await completeAuth(email);
+  await completeAuth(email, "", {
+    dashboardSection: event.submitter?.value === "signup" ? "billing" : "projects"
+  });
   $("#authDialog").close();
 });
 
 setupSectionResize();
 window.addEventListener("resize", () => {
+  if (window.innerWidth > 820) closeMobileDrawers();
   applySavedLayoutDimensions();
   resizeCanvases();
 });
 
 async function initializeApp() {
+  const checkoutStatus = getCheckoutReturnStatus();
+  if (supabase) {
+    const { data } = await supabase.auth.getSession();
+    if (data.session?.user) {
+      await completeAuth(data.session.user, data.session.user.email, {
+        checkoutStatus,
+        dashboardSection: checkoutStatus ? "billing" : "projects"
+      });
+      resizeCanvases();
+      return;
+    }
+  }
+
   await requireFreshLogin();
+  if (checkoutStatus === "success") {
+    setBillingStatusMessage("Log in to finish checking your subscription status.");
+  } else if (checkoutStatus === "cancelled") {
+    setBillingStatusMessage("Checkout was cancelled. Log in to choose a plan.");
+  }
   resizeCanvases();
 }
 

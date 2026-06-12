@@ -1,10 +1,6 @@
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
-import { assertLiveStripeInProduction } from "./_stripe-config.js";
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: "2026-02-25.clover"
-});
+import { STRIPE_API_VERSION, assertLiveStripeInProduction } from "./_stripe-config.js";
 
 let supabaseAdmin;
 
@@ -21,13 +17,24 @@ function getSupabaseAdmin() {
   return supabaseAdmin;
 }
 
+function getSubscriptionPeriodEnd(subscription) {
+  return subscription.current_period_end
+    ? new Date(subscription.current_period_end * 1000).toISOString()
+    : null;
+}
+
 export default async function handler(request, response) {
   const signature = request.headers["stripe-signature"];
-  const supabase = getSupabaseAdmin();
+  let stripe;
+  let supabase;
   let event;
 
   try {
-    assertLiveStripeInProduction();
+    const secretKey = assertLiveStripeInProduction();
+    stripe = new Stripe(secretKey, {
+      apiVersion: STRIPE_API_VERSION
+    });
+    supabase = getSupabaseAdmin();
     if (!process.env.STRIPE_WEBHOOK_SECRET) throw new Error("Missing STRIPE_WEBHOOK_SECRET");
     event = stripe.webhooks.constructEvent(request.rawBody, signature, process.env.STRIPE_WEBHOOK_SECRET);
   } catch (error) {
@@ -37,22 +44,30 @@ export default async function handler(request, response) {
 
   if (event.type === "checkout.session.completed") {
     const session = event.data.object;
+    const update = {
+      stripe_customer_id: session.customer,
+      subscription_status: "active"
+    };
+
+    if (session.subscription) {
+      const subscription = await stripe.subscriptions.retrieve(session.subscription);
+      update.subscription_status = subscription.status;
+      update.subscription_current_period_end = getSubscriptionPeriodEnd(subscription);
+    }
+
     await supabase
       .from("profiles")
-      .update({
-        stripe_customer_id: session.customer,
-        subscription_status: "active"
-      })
+      .update(update)
       .eq("id", session.client_reference_id);
   }
 
-  if (event.type === "customer.subscription.updated" || event.type === "customer.subscription.deleted") {
+  if (event.type === "customer.subscription.created" || event.type === "customer.subscription.updated" || event.type === "customer.subscription.deleted") {
     const subscription = event.data.object;
     await supabase
       .from("profiles")
       .update({
         subscription_status: subscription.status,
-        subscription_current_period_end: new Date(subscription.current_period_end * 1000).toISOString()
+        subscription_current_period_end: getSubscriptionPeriodEnd(subscription)
       })
       .eq("stripe_customer_id", subscription.customer);
   }

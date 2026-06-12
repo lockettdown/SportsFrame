@@ -39,7 +39,7 @@ The publishable key is safe for browser use. Do not put service-role keys in `VI
 
 1. Create a Supabase project.
 2. Run `supabase/schema.sql` in the Supabase SQL editor. For an existing database that already has `saved_frames`, run `supabase/saved_frames_metadata.sql` to add the saved-frame metadata columns.
-3. Create private storage buckets for videos, saved frames, and reports.
+3. Create private storage buckets for saved frames and reports. Raw videos are local-only by default; for an existing project that already has a `videos` storage bucket, run `supabase/local_video_metadata_only.sql`.
 4. Configure environment variables:
 
 ```bash
@@ -50,14 +50,15 @@ SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
-STRIPE_PRO_MONTHLY_PRICE_ID=
-STRIPE_PRO_ANNUAL_PRICE_ID=
+STRIPE_PRO_MONTHLY_PRICE_ID=price_1TbtVwRtfyNEg1V9pu04kMM4
+STRIPE_PRO_ANNUAL_PRICE_ID=price_1TbtVvRtfyNEg1V9BsMHmcUl
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4.1-mini
 APP_URL=
 ```
 
 5. Run `npm run dev` for local development. The local dev server serves both Vite and the `api/` handlers so Stripe Checkout can call `/api/create-checkout-session`.
-6. Deploy the API handlers in `api/` to a serverless host that supports raw request bodies for Stripe webhooks.
+6. In production, set `STRIPE_SECRET_KEY` to a live `sk_live_` key and `STRIPE_WEBHOOK_SECRET` to the signing secret for the Stripe webhook endpoint.
+7. Deploy the API handlers in `api/` to a serverless host that supports raw request bodies for Stripe webhooks.
 
 Every application table includes a `user_id` column and RLS policy tied to `auth.uid()`, so users can only create, read, update, and delete records they own.
