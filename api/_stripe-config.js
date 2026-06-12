@@ -2,7 +2,7 @@ export const STRIPE_API_VERSION = "2026-02-25.clover";
 
 const liveStripePriceIds = {
   monthly: "price_1TbtVwRtfyNEg1V9pu04kMM4",
-  annual: "price_1TbtVvRtfyNEg1V9BsMHmcUl"
+  annual: "price_1ThXvORtfyNEg1V949ymHbu7"
 };
 
 function cleanEnvValue(value) {
